@@ -23,6 +23,7 @@ tmp_noisy*/
 tmp_seed*/
 tmp_misspec_grav/
 tmp_review/
+tmp_ablation/
 *_run.log
 *.dat
 tmp_score_seed_repeat.log
