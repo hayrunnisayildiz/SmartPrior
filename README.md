@@ -77,6 +77,16 @@ FeatureStack (gravite+MT+NB+topografya kanalları) → Lux.jl koordinat-ağı
   güncel kodla doğrulandı.
 - Kalibrasyon: reference=0.1 en dengeli nokta (tek seed).
 
+Ablasyon (`examples/ablation_prior_2d.jl`): aynı sentetik veri ve VFSA
+ayarlarıyla dört başlangıç — A yarı-uzay, B NB-bedava, C NB+doğrusal
+gravite, D tam prior. Üst satır başlangıç, alt satır VFSA sonucu:
+
+![Ablasyon: TRUTH vs A/B/C/D, üst=başlangıç alt=VFSA](docs/ablation_comparison.png)
+
+Yalnızca VFSA sonuçları:
+
+![VFSA sonuçları: TRUTH vs A/B/C/D](docs/ablation_results_only.png)
+
 **Gerçek veri (Musgrave Province, AusLAMP, Avustralya — truth YOK):**
 - Üç bağımsız kalibrasyon hatası bulunup düzeltildi: MT empedans birimi
   (mV/km/nT, SI değil), gravite hata kaynağı (ölçüm hassasiyeti ≠ model
