@@ -1,0 +1,35 @@
+# Manifest.toml is tracked (not ignored). MTGeophysics is pinned to the
+# combination this package was tested against; see README Installation.
+
+# training checkpoints and run outputs
+*.jld2
+runs/
+out/
+tmp_compare_2d/
+tmp_calib/
+tmp/
+
+# data downloaded from external providers, never vendored into the repo
+data/raw/
+data_aust/
+
+# diagnostic run directories and large binary dumps (not vendored)
+tmp_musgrave/
+tmp_musgrave_coarse/
+tmp_musgrave_smooth50/
+tmp_calib_v2/
+tmp_hetero_ref01/
+tmp_noisy*/
+tmp_seed*/
+tmp_misspec_grav/
+tmp_review/
+*_run.log
+*.dat
+tmp_score_seed_repeat.log
+tmp_seed_repeats.log
+tmp_seed_repeats_metrics.tsv
+
+# local Cursor rules / editor state — not part of the package
+.cursor/
+
+.DS_Store

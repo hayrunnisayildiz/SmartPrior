@@ -1,0 +1,272 @@
+using Test
+using SmartPriorMT
+using Statistics
+
+# a small but non-uniform grid, so mesh grading bugs have somewhere to show up
+function _test_grid()
+    dx = [400.0, 400.0, 400.0, 400.0, 600.0, 900.0]
+    dy = [400.0, 400.0, 400.0, 400.0, 600.0]
+    dz = [50.0, 75.0, 110.0, 165.0, 250.0, 375.0]
+    return PriorGrid(dx, dy, dz; origin = [-1550.0, -1100.0, 0.0])
+end
+
+function _test_sites(g)
+    sx = [-600.0, 0.0, 600.0]
+    sy = [-300.0, 0.0, 300.0]
+    T = 10 .^ range(-2, 2; length = 12)
+    f = 1 ./ T
+    rho_a = Matrix{Float64}(undef, length(T), 3)
+    phase = similar(rho_a)
+    for (t, ρ) in enumerate([50.0, 100.0, 200.0])
+        a, p = mt1d_apparent(f, [ρ], Float64[])
+        rho_a[:, t] .= a
+        phase[:, t] .= p
+    end
+    return MTSites(sx, sy, T, rho_a, phase)
+end
+
+@testset "GravityObs and MTSites validation" begin
+    @test_throws ArgumentError GravityObs([0.0], [0.0], [0.0], [1.0], [1.0, 2.0])
+    @test_throws ArgumentError GravityObs(Float64[], Float64[], Float64[], Float64[], Float64[])
+
+    o = GravityObs([0.0, 1.0], [0.0, 1.0], [0.0, 0.0], [1.0, 2.0], [0.1, 0.1])
+    @test length(o) == 2
+
+    T = [1.0, 10.0]
+    @test_throws ArgumentError MTSites([0.0], [0.0], T, zeros(3, 1), zeros(2, 1))
+    @test_throws ArgumentError MTSites([0.0], [0.0, 1.0], T, zeros(2, 1), zeros(2, 1))
+    s = MTSites([0.0], [0.0], T, fill(100.0, 2, 1), fill(45.0, 2, 1))
+    @test nsites(s) == 1
+end
+
+@testset "standardize" begin
+    A = [1.0 2.0; 3.0 4.0]
+    S = standardize(A)
+    @test mean(S) ≈ 0 atol = 1e-12
+    @test std(S) ≈ 1 rtol = 1e-12
+
+    # a constant field has no information and must not divide by zero
+    @test all(iszero, standardize(fill(7.0, 3, 3)))
+    @test_throws ArgumentError standardize([1.0, NaN])
+end
+
+@testset "extrude" begin
+    M = [1.0 2.0; 3.0 4.0]
+    E = extrude(M, 3)
+    @test size(E) == (2, 2, 3)
+    @test E[:, :, 1] == M
+    @test E[:, :, 3] == M
+end
+
+@testset "idw_to_grid" begin
+    g = _test_grid()
+    sx = [-1000.0, 1000.0]
+    sy = [0.0, 0.0]
+    v = [10.0, 20.0]
+
+    M = idw_to_grid(g, sx, sy, v)
+    @test size(M) == (6, 5)
+    @test all(10.0 .<= M .<= 20.0)          # interpolation, never extrapolation in value
+    # cells near the first station lean towards its value
+    @test M[1, 3] < M[6, 3]
+
+    # a single station gives a constant field
+    @test all(≈(5.0), idw_to_grid(g, [0.0], [0.0], [5.0]))
+
+    # identical values give that value everywhere regardless of layout
+    @test all(≈(3.0), idw_to_grid(g, sx, sy, [3.0, 3.0]))
+
+    @test_throws ArgumentError idw_to_grid(g, sx, sy, [1.0])
+    @test_throws ArgumentError idw_to_grid(g, sx, sy, v; power = 0.0)
+    @test_throws ArgumentError idw_to_grid(g, sx, sy, v; smoothing = -1.0)
+end
+
+@testset "gaussian_smooth_xy preserves constants on a graded mesh" begin
+    # the property the renormalisation exists for: no edge darkening, and no
+    # dependence on how the mesh grades
+    g = _test_grid()
+    nx, ny, _ = size(g)
+    @test all(≈(2.5), gaussian_smooth_xy(g, fill(2.5, nx, ny), 1000.0))
+    @test all(≈(-7.0), gaussian_smooth_xy(g, fill(-7.0, nx, ny), 200.0))
+end
+
+@testset "gaussian_smooth_xy spreads a spike" begin
+    # peak location and symmetry only hold on a uniform mesh; on a graded one the
+    # per-cell weight sum differs and the maximum can land a cell off the spike
+    g = PriorGrid(fill(400.0, 7), fill(400.0, 7), [100.0])
+    spike = zeros(7, 7)
+    spike[4, 4] = 1.0
+
+    sm = gaussian_smooth_xy(g, spike, 800.0)
+    @test sm[4, 4] < 1.0
+    @test sm[4, 4] == maximum(sm)
+    @test sm[3, 4] ≈ sm[5, 4] rtol = 1e-12
+    @test sm[4, 3] ≈ sm[4, 5] rtol = 1e-12
+    @test sm[3, 4] > sm[2, 4] > 0
+
+    # a wider kernel flattens the field: the peak drops and the peak-to-trough
+    # range shrinks. Renormalising per cell means the kernel does not conserve
+    # mass, so the far-field value is not monotonic in sigma and the range is the
+    # property worth asserting.
+    wider = gaussian_smooth_xy(g, spike, 2000.0)
+    @test wider[4, 4] < sm[4, 4]
+    @test (maximum(wider) - minimum(wider)) < (maximum(sm) - minimum(sm))
+end
+
+@testset "gaussian_smooth_xy validation" begin
+    g = _test_grid()
+    nx, ny, _ = size(g)
+    @test_throws DimensionMismatch gaussian_smooth_xy(g, zeros(2, 2), 100.0)
+    @test_throws ArgumentError gaussian_smooth_xy(g, zeros(nx, ny), 0.0)
+end
+
+@testset "gradient_xy" begin
+    g = _test_grid()
+    nx, ny, _ = size(g)
+
+    # an exactly linear field must give the exact slope everywhere, which only
+    # holds if the non-uniform spacing is handled properly
+    slope = 0.003
+    M = [slope * g.cx[i] for i in 1:nx, j in 1:ny]
+    dx, dy = gradient_xy(g, M)
+    @test all(≈(slope; rtol = 1e-10), dx)
+    @test all(≈(0.0; atol = 1e-14), dy)
+
+    M2 = [-0.002 * g.cy[j] for i in 1:nx, j in 1:ny]
+    dx2, dy2 = gradient_xy(g, M2)
+    @test all(≈(0.0; atol = 1e-14), dx2)
+    @test all(≈(-0.002; rtol = 1e-10), dy2)
+
+    # a degenerate axis returns zeros rather than failing
+    g1 = PriorGrid([100.0], [100.0, 100.0], [100.0])
+    d1x, d1y = gradient_xy(g1, [1.0 2.0])
+    @test all(iszero, d1x)
+    @test size(d1y) == (1, 2)
+end
+
+@testset "nb_baseline recovers a half-space" begin
+    g = _test_grid()
+    T = 10 .^ range(-2, 3; length = 30)
+    f = 1 ./ T
+    ρ_true = 120.0
+    a, p = mt1d_apparent(f, [ρ_true], Float64[])
+
+    sites = MTSites([-500.0, 500.0], [0.0, 0.0], T,
+                    hcat(a, a), hcat(p, p))
+
+    base = nb_baseline(g, sites)
+    @test size(base) == size(g)
+    # both sites see the same uniform earth, so every cell must land on it
+    @test all(≈(log10(ρ_true); rtol = 1e-3), base)
+end
+
+@testset "nb_baseline blends laterally between differing sites" begin
+    g = _test_grid()
+    T = 10 .^ range(-2, 3; length = 30)
+    f = 1 ./ T
+
+    a1, p1 = mt1d_apparent(f, [10.0], Float64[])
+    a2, p2 = mt1d_apparent(f, [1000.0], Float64[])
+    sites = MTSites([-1200.0, 1200.0], [0.0, 0.0], T,
+                    hcat(a1, a2), hcat(p1, p2))
+
+    base = nb_baseline(g, sites)
+    # the conductive site is at negative x, so the field must increase with x
+    @test base[1, 3, 1] < base[6, 3, 1]
+    @test all(log10(10.0) - 0.1 .<= base .<= log10(1000.0) + 0.1)
+end
+
+@testset "channel builders" begin
+    g = _test_grid()
+    nx, ny, nz = size(g)
+    sites = _test_sites(g)
+
+    obs = GravityObs(collect(range(-1200.0, 1200.0; length = 9)),
+                     zeros(9), zeros(9),
+                     [0.0, 1.0, 3.0, 6.0, 8.0, 6.0, 3.0, 1.0, 0.0],
+                     fill(0.2, 9))
+
+    gc, gn = gravity_channels(g, obs)
+    @test length(gc) == length(gn)
+    @test gn[1:3] == ["gravity", "gravity_dx", "gravity_dy"]
+    @test "gravity_long" in gn
+    @test all(c -> size(c) == (nx, ny, nz), gc)
+    @test all(c -> all(isfinite, c), gc)
+
+    surface = fill(0.0, nx, ny)
+    surface[1, :] .= 120.0
+    tc, tn = topography_channels(g, surface)
+    @test tn == ["surface_z", "depth_below_surface"]
+    @test all(c -> size(c) == (nx, ny, nz), tc)
+    # a cell under a higher surface is shallower below it
+    @test tc[2][1, 1, 2] < tc[2][2, 1, 2]
+    @test_throws DimensionMismatch topography_channels(g, zeros(2, 2))
+
+    dc, dn = depth_channels(g; rho_ref = 100.0, period_max = 100.0)
+    @test dn == ["log_depth", "depth_over_skin"]
+    @test issorted(vec(dc[2][1, 1, :]))
+    @test dc[2][1, 1, 1] > 0
+    @test_throws ArgumentError depth_channels(g; rho_ref = 0.0)
+    @test_throws ArgumentError depth_channels(g; period_max = -1.0)
+
+    cc, cn = coverage_channels(g, sites.x, sites.y)
+    @test cn == ["site_distance"]
+    @test all(cc[1] .>= 0)
+    # the far corner is further from every site than the middle
+    @test cc[1][6, 5, 1] > cc[1][3, 3, 1]
+    @test_throws ArgumentError coverage_channels(g, [0.0], Float64[])
+end
+
+@testset "build_features assembles only what it is given" begin
+    g = _test_grid()
+    nx, ny, nz = size(g)
+    sites = _test_sites(g)
+    obs = GravityObs([-500.0, 500.0], [0.0, 0.0], [0.0, 0.0], [2.0, -1.0], [0.1, 0.1])
+    surface = zeros(nx, ny)
+
+    minimal = build_features(g; coordinates = true)
+    @test minimal.names == ["x_norm", "y_norm", "z_norm", "log_depth", "depth_over_skin"]
+    @test size(minimal) == (nx, ny, nz, 5)
+
+    full = build_features(g; gravity = obs, surface_z = surface, sites = sites)
+    @test "gravity" in full.names
+    @test "surface_z" in full.names
+    @test "site_distance" in full.names
+    @test "baseline" in full.names
+    @test nchannels(full) == length(full.names)
+    @test all(isfinite, full.data)
+
+    # dropping the coordinate channels is how a transferable model is trained
+    no_coords = build_features(g; gravity = obs, sites = sites, coordinates = false)
+    @test !("x_norm" in no_coords.names)
+    @test nchannels(no_coords) == nchannels(full) - 3 - 2  # no coords, no topography
+
+    # an explicit baseline overrides the automatic Niblett-Bostick one
+    custom = fill(2.0, nx, ny, nz)
+    withbase = build_features(g; baseline = custom, coordinates = false)
+    @test "baseline" in withbase.names
+    @test_throws DimensionMismatch build_features(g; baseline = zeros(2, 2, 2))
+
+    @test full["gravity"] isa AbstractArray{Float64,3}
+    @test_throws KeyError full["not_a_channel"]
+end
+
+@testset "feature_matrix layout matches vec of the grid" begin
+    g = _test_grid()
+    nx, ny, nz = size(g)
+    s = build_features(g; coordinates = true)
+
+    M = feature_matrix(s)
+    @test size(M) == (nchannels(s), nx * ny * nz)
+
+    # row k of the matrix must be vec of channel k, so a network output can be
+    # reshaped straight back onto the grid without reordering
+    for k in 1:nchannels(s)
+        @test M[k, :] == vec(s.data[:, :, :, k])
+    end
+end
+
+@testset "FeatureStack validation" begin
+    @test_throws ArgumentError FeatureStack(zeros(2, 2, 2, 2), ["a"])
+    @test_throws ArgumentError FeatureStack(zeros(2, 2, 2, 2), ["a", "a"])
+end
