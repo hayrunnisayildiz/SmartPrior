@@ -100,6 +100,7 @@ targets = PriorTargets(
     mt = (sites, site_cells),
     reference = vec(baseline),
     sigma_target = 0.35,
+    sigma_drive = SigmaDriveConfig(),
 )
 
 net = PriorNet(size(X, 1);
@@ -206,9 +207,13 @@ println(repeat("=", 62))
 @printf("ref term share of total      %.4f / %.4f  = %.1f%%  (weight × unweighted)\n",
         w_ref, last_hist.total, 100 * ref_share)
 println(repeat("=", 62))
-@printf("previous (reference = 0):    a = +1.720  b = +0.370  RMSE = 0.628\n")
+@printf("previous (reference = 0, uniform σ): a = +1.720  b = +0.370  RMSE = 0.628\n")
 @printf("                             bias = +0.396  corr = 0.328\n")
 @printf("                             mean(σ) = 0.361  corr(σ,|res|) = +0.09  spread = 0.082\n")
+if haskey(last_hist, :sigma_target_mean)
+    @printf("σ drive target (last log):   mean %.4f  std %.4f\n",
+            last_hist.sigma_target_mean, last_hist.sigma_target_std)
+end
 @printf("acceptance: ham RMSE < 0.456 (half-space). this run: %.4f  %s\n",
         raw_rmse, raw_rmse < 0.456 ? "PASS" : "FAIL")
 println(repeat("=", 62))

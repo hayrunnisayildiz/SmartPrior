@@ -343,10 +343,147 @@ Without it the likelihood term has a degenerate direction: away from any anchor
 `sigma` can drift to whichever bound costs least, and since the bounds are hard
 the gradient there vanishes and the value sticks. This keeps unconstrained cells
 at a stated default rather than at an accident of initialisation.
+
+`target` may be a scalar (applied uniformly) or a vector of the same length as
+`sigma` (per-cell targets from [`compute_sigma_targets`](@ref)). The computation
+is the same in both cases thanks to broadcasting.
 """
-function sigma_penalty(sigma::AbstractVector; target::Real)
-    target > 0 || throw(ArgumentError("sigma_penalty: target must be positive"))
+function sigma_penalty(sigma::AbstractVector; target::Union{Real,AbstractVector})
+    if target isa AbstractVector
+        length(sigma) == length(target) || throw(DimensionMismatch(
+            "sigma_penalty: sigma has $(length(sigma)) entries but target has $(length(target))"))
+        all(>(0), target) || throw(ArgumentError(
+            "sigma_penalty: all per-cell targets must be positive"))
+    else
+        target > 0 || throw(ArgumentError("sigma_penalty: target must be positive"))
+    end
     return mean(abs2.(sigma .- target))
+end
+
+#---------- data-driven sigma ----------
+
+"""
+    SigmaDriveConfig(; alpha=0.5, beta=0.3, baseline=0.15,
+                     sigma_lo=0.05, sigma_hi=0.9)
+
+Configuration for computing per-cell sigma targets from data misfit.
+
+- `alpha`: weight of the MT column residual contribution. A column that fits
+  poorly in log10 ρ_a gets a wider search interval.
+- `beta`: weight of the gravity insensitivity contribution. Cells the gravity
+  operator barely sees (low column norm in the forward matrix) get wider intervals.
+- `baseline`: the minimum / default sigma for cells not covered by any data term.
+- `sigma_lo`, `sigma_hi`: hard clamp applied after combining the terms. Should
+  match or sit inside the network's `sigma_bounds`.
+"""
+Base.@kwdef struct SigmaDriveConfig
+    alpha::Float64 = 0.5
+    beta::Float64 = 0.3
+    baseline::Float64 = 0.15
+    sigma_lo::Float64 = 0.05
+    sigma_hi::Float64 = 0.9
+
+    function SigmaDriveConfig(alpha, beta, baseline, sigma_lo, sigma_hi)
+        alpha >= 0 || throw(ArgumentError("SigmaDriveConfig: alpha must be non-negative"))
+        beta >= 0 || throw(ArgumentError("SigmaDriveConfig: beta must be non-negative"))
+        baseline > 0 || throw(ArgumentError("SigmaDriveConfig: baseline must be positive"))
+        0 < sigma_lo < sigma_hi ||
+            throw(ArgumentError("SigmaDriveConfig: need 0 < sigma_lo < sigma_hi"))
+        return new(alpha, beta, baseline, sigma_lo, sigma_hi)
+    end
+end
+
+"""
+    mt_column_residuals(mu3, grid, sites, site_cells) -> Vector{Float64}
+
+Per-site root-mean-square residual in log10 apparent resistivity space.
+
+This is the non-AD, diagnostic version of the column check: it tells how well
+the current `mu` field explains each sounding curve through its own 1-D response.
+Cells under high-residual columns are poorly constrained and deserve a wider
+search interval.
+"""
+function mt_column_residuals(mu3::AbstractArray{<:Real,3},
+                             grid::PriorGrid,
+                             sites::MTSites,
+                             site_cells::AbstractVector{<:Tuple{Integer,Integer}})
+    ns = nsites(sites)
+    length(site_cells) == ns || throw(DimensionMismatch(
+        "mt_column_residuals: expected one column per site ($(ns)), got $(length(site_cells))"))
+    nx, ny, nz = size(grid)
+    size(mu3) == (nx, ny, nz) || throw(DimensionMismatch(
+        "mt_column_residuals: mu must match the grid $(nx)×$(ny)×$(nz), got $(size(mu3))"))
+
+    f = 1 ./ sites.periods
+    residuals = Vector{Float64}(undef, ns)
+    for t in 1:ns
+        i, j = site_cells[t]
+        rho_col = 10 .^ Float64.(mu3[i, j, :])
+        pred_a, _ = mt1d_column_response(f, rho_col, grid.dz)
+        obs_a = view(sites.rho_a, :, t)
+        residuals[t] = sqrt(mean(abs2.(log10.(pred_a) .- log10.(obs_a))))
+    end
+    return residuals
+end
+
+"""
+    compute_sigma_targets(mu_vec, grid, targets, coupling;
+                          config::SigmaDriveConfig) -> Vector{Float64}
+
+Per-cell sigma targets derived from data misfit.
+
+The idea: where the model already fits well, the search interval can be narrow
+(small σ); where it fits poorly or the data have no sensitivity, the interval
+should stay wide (large σ). Two signals feed in:
+
+1. **MT column residual** — each site's RMS log10 ρ_a error is assigned to every
+   cell in the column beneath it. Cells not under any site get `baseline`.
+2. **Gravity sensitivity** — the column norm of the forward operator tells how
+   much each cell contributes to the surface anomaly. Cells with low sensitivity
+   are gravity-blind and get a wider interval.
+
+This function is called **outside** the AD graph — its output is treated as a
+constant target by `sigma_penalty`, so no gradient flows back through it to `mu`.
+"""
+function compute_sigma_targets(mu_vec::AbstractVector{<:Real},
+                               grid::PriorGrid,
+                               targets,  # PriorTargets (forward-declared)
+                               coupling::GravityCoupling;
+                               config::SigmaDriveConfig = SigmaDriveConfig())
+    n = ncells(grid)
+    length(mu_vec) == n || throw(DimensionMismatch(
+        "compute_sigma_targets: mu has $(length(mu_vec)) entries, grid has $(n) cells"))
+    nx, ny, nz = size(grid)
+
+    sigma_t = fill(config.baseline, n)
+
+    # ---- MT contribution ----
+    if targets.mt !== nothing
+        sites, site_cells = targets.mt
+        mu3 = reshape(collect(Float64, mu_vec), (nx, ny, nz))
+        residuals = mt_column_residuals(mu3, grid, sites, site_cells)
+        li = LinearIndices((nx, ny, nz))
+        for (t, (ci, cj)) in enumerate(site_cells)
+            for k in 1:nz
+                sigma_t[li[ci, cj, k]] += config.alpha * residuals[t]
+            end
+        end
+    end
+
+    # ---- gravity sensitivity contribution ----
+    if targets.gravity !== nothing
+        A, _, _ = targets.gravity
+        size(A, 2) == n || throw(DimensionMismatch(
+            "compute_sigma_targets: gravity matrix has $(size(A,2)) columns, grid has $(n) cells"))
+        col_norms = [norm(view(A, :, c)) for c in 1:n]
+        mx = maximum(col_norms)
+        if mx > 0
+            col_norms ./= mx
+            sigma_t .+= config.beta .* (1.0 .- col_norms)
+        end
+    end
+
+    return clamp.(sigma_t, config.sigma_lo, config.sigma_hi)
 end
 
 #---------- assembled objective ----------
@@ -377,8 +514,8 @@ end
 
 """
     PriorTargets(; anchors=nothing, gravity=nothing, mt=nothing, reference=nothing,
-                 sigma_target=0.5, phase_weight=1.0, vertical_weight=1.0,
-                 reference_weight=nothing)
+                 sigma_target=0.5, sigma_drive=nothing, sigma_target_vec=nothing,
+                 phase_weight=1.0, vertical_weight=1.0, reference_weight=nothing)
 
 Everything the loss needs besides the network output.
 
@@ -395,6 +532,12 @@ Everything the loss needs besides the network output.
   a depth taper lives here.
 - `gravity_detrend`: passed to [`gravity_misfit`](@ref); see there for why the
   default removes the residual's mean.
+- `sigma_drive`: when set, [`train_prior`](@ref) computes per-cell sigma targets
+  from data misfit at each epoch using [`compute_sigma_targets`](@ref), replacing
+  the uniform `sigma_target`.
+- `sigma_target_vec`: per-cell sigma targets computed by the training loop. Users
+  should not set this directly; it is populated by `train_prior` when
+  `sigma_drive` is present.
 
 Any term whose inputs are absent is skipped, so the same objective works on a
 survey with gravity but no boreholes, or anchors but no gravity. The damping
@@ -407,6 +550,8 @@ Base.@kwdef struct PriorTargets
     reference::Union{Nothing,Vector{Float64}} = nothing
     gravity_detrend::Symbol = :mean
     sigma_target::Float64 = 0.5
+    sigma_drive::Union{Nothing,SigmaDriveConfig} = nothing
+    sigma_target_vec::Union{Nothing,Vector{Float64}} = nothing
     phase_weight::Float64 = 1.0
     vertical_weight::Float64 = 1.0
     reference_weight::Union{Nothing,Vector{Float64}} = nothing
@@ -493,7 +638,9 @@ function _loss_terms(mu::AbstractVector, sigma::AbstractVector,
                              vertical_weight = targets.vertical_weight)
     total += weights.smooth * smooth_term
 
-    sigma_term = sigma_penalty(sigma; target = targets.sigma_target)
+    effective_sigma_target = targets.sigma_target_vec !== nothing ?
+        targets.sigma_target_vec : targets.sigma_target
+    sigma_term = sigma_penalty(sigma; target = effective_sigma_target)
     total += weights.sigma * sigma_term
 
     if targets.reference !== nothing

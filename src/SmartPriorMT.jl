@@ -68,6 +68,7 @@ export fourier_encode, encode_features
 # training objective
 export GravityCoupling, density_from_mu, physical_slope, DENSITY_SCALE
 export heteroscedastic_nll, gravity_misfit, mt_column_misfit, smoothness, reference_penalty, sigma_penalty
+export SigmaDriveConfig, mt_column_residuals, compute_sigma_targets
 export LossWeights, PriorTargets, prior_loss, loss_report
 
 # training

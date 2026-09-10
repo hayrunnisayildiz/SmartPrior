@@ -242,6 +242,7 @@ targets = PriorTargets(
     mt = (sites, site_cells),
     reference = vec(baseline),
     sigma_target = 0.35,
+    sigma_drive = SigmaDriveConfig(),
 )
 
 # residual_span has to exceed the largest departure from the baseline that the

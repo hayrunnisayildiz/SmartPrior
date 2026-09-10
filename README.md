@@ -96,8 +96,9 @@ Yalnızca VFSA sonuçları:
 - target_rms=1.0 duman testinde (max_iter=100) prior 5-6 iterasyonda
   hedefe ulaştı, yarı-uzay 100 iterasyonda bile ulaşamadı (en iyi
   1.09-1.19). Ayrı bir tam-bütçe koşusunda (target_rms=0.1, max_iter=400,
-  erken durma kapalı) ikisi de hedefe ulaşamadı ama prior yine daha düşük
-  final RMS'e indi (0.911 vs 1.040).
+  erken durma kapalı) ikisi de 0.1'e ulaşamadı; prior 0.911'de, yarı-uzay
+  1.040'ta durdu. Bu, `model_err_frac=0.4` ile χ²/datum≈1 tabanı (RMS=1,
+  N=414 TE-only ZXY); 0.911 tıkanıklık değil, bütçeye oturma.
 - ❌ Prior'ın NİHAİ KALİTESİ (yarı-uzaydan daha doğru mu) kanıtlanamadı
   — truth yok, düşük RMS/yüksek pürüzlülük ayırt edilemiyor.
 
@@ -108,7 +109,10 @@ Yalnızca VFSA sonuçları:
 - TE-only (TM incelendi, v0.1.0'a alınmadı; bkz. Açık Sorular / v0.2 Adayları).
 - VFSA'nın kendi ileri fiziği düz-datum varsayıyor; surface_z sadece
   prior üretiminde kullanılıyor, VFSA'nın kendisine girmiyor.
-- σ hiç veriye fit edilmiyor (anchor mekanizması var ama beslenmiyor).
+- σ, anchor yokken likelihood ile fit edilmez. `SigmaDriveConfig` MT kolon
+  artığı ve gravite duyarlılığından hücre-bazlı bir hedef üretir; `sigma_penalty`
+  σ'yı o haritaya çeker (`examples/compare_prior_2d.jl`). Heteroscedastic NLL
+  yalnızca anchor hücrelerinde çalışır.
 - Gravite tarafında operatör-düzeyinde ters suç var (bilerek, petrofizik
   bağımsız); MT'de yok.
 - `RealDataIO.jl` şu an Musgrave'e özgü (hardcoded); genel bir "kendi

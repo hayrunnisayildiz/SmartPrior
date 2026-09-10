@@ -191,6 +191,18 @@ Fit one prior field.
 
 `X` is the `[nfeature, ncell]` input from [`encode_features`](@ref), `offset` the
 optional baseline that puts the network in residual mode.
+
+When `targets.sigma_drive` is set, per-cell sigma targets are computed from the
+current `mu` field at each epoch using [`compute_sigma_targets`](@ref). The targets
+are computed **outside** the AD graph, so no gradient flows through them back to
+`mu`. This is the EM-style update: the network's current best guess determines
+what the uncertainty targets should be, and those targets then steer the next
+gradient step.
+
+Without `sigma_drive` and without anchors, `sigma_penalty` is the only gradient
+on σ and it pulls every cell to the scalar `sigma_target`. A warning is emitted
+when MT data are present in that configuration, because the search intervals
+would then be a constant rather than a function of the data.
 """
 function train_prior(net::PriorNet,
                      X::AbstractMatrix,
@@ -226,6 +238,16 @@ function train_prior(net::PriorNet,
                  only survives if it buys more misfit reduction than it costs."""
     end
 
+    if targets.sigma_drive === nothing && targets.anchors === nothing &&
+       targets.mt !== nothing
+        @warn """train_prior: MT data are present but σ has no data term. \
+                 Anchors are absent, so heteroscedastic_nll never fires, and \
+                 sigma_penalty will pull every cell toward sigma_target=\
+                 $(targets.sigma_target). Set PriorTargets(sigma_drive = \
+                 SigmaDriveConfig()) so search intervals follow MT column \
+                 residual and gravity sensitivity."""
+    end
+
     opt_state = Optimisers.setup(Optimisers.Adam(config.learning_rate), params)
 
     history = NamedTuple[]
@@ -234,19 +256,52 @@ function train_prior(net::PriorNet,
     best_params = params
     stale = 0
 
-    lossfn = p -> _train_loss(net, X, st, grid, targets, config.weights, offset, p)
+    use_sigma_drive = targets.sigma_drive !== nothing
 
     for epoch in 1:config.epochs
+        # ---- data-driven sigma targets (outside AD) ----
+        effective_targets = if use_sigma_drive
+            (mu_now, _), _ = predict(net, X, params.net, st; offset = offset)
+            sigma_vec = compute_sigma_targets(
+                collect(Float64, mu_now), grid, targets, coupling_of(params);
+                config = targets.sigma_drive)
+            PriorTargets(
+                anchors = targets.anchors,
+                gravity = targets.gravity,
+                mt = targets.mt,
+                reference = targets.reference,
+                gravity_detrend = targets.gravity_detrend,
+                sigma_target = targets.sigma_target,
+                sigma_drive = targets.sigma_drive,
+                sigma_target_vec = sigma_vec,
+                phase_weight = targets.phase_weight,
+                vertical_weight = targets.vertical_weight,
+                reference_weight = targets.reference_weight,
+            )
+        else
+            targets
+        end
+
+        lossfn = p -> _train_loss(net, X, st, grid, effective_targets, config.weights, offset, p)
         val, grads = Zygote.withgradient(lossfn, params)
         isfinite(val) || error("train_prior: loss became $(val) at epoch $(epoch)")
         opt_state, params = Optimisers.update!(opt_state, params, grads[1])
 
         if epoch % config.log_every == 0 || epoch == 1 || epoch == config.epochs
             (mu, sigma), _ = predict(net, X, params.net, st; offset = offset)
-            report = loss_report(mu, sigma, coupling_of(params), grid, targets, config.weights)
+            report = loss_report(mu, sigma, coupling_of(params), grid,
+                                 effective_targets, config.weights)
             sat = _saturation(net, mu, offset)
             slope = coupling_of(params).slope
             entry = merge((epoch = epoch, slope = slope, saturation = sat), report)
+
+            # record sigma target statistics when data-driven
+            if use_sigma_drive && effective_targets.sigma_target_vec !== nothing
+                stv = effective_targets.sigma_target_vec
+                entry = merge(entry, (sigma_target_mean = mean(stv),
+                                      sigma_target_std = std(stv)))
+            end
+
             push!(history, entry)
 
             config.verbose && @printf("epoch %6d  total %.5e  slope %+.3f  sat %.3f\n",

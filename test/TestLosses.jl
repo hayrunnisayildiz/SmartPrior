@@ -267,6 +267,124 @@ end
     @test sigma_penalty(fill(0.5, 4); target = 0.5) ≈ 0.0
     @test sigma_penalty(fill(0.7, 4); target = 0.5) ≈ 0.04
     @test_throws ArgumentError sigma_penalty([0.5]; target = 0.0)
+
+    # vector targets: same computation, per-cell
+    vec_t = [0.3, 0.5, 0.4, 0.6]
+    @test sigma_penalty(vec_t; target = vec_t) ≈ 0.0
+    @test sigma_penalty(fill(0.5, 4); target = vec_t) ≈ mean(abs2.([0.2, 0.0, 0.1, -0.1]))
+
+    # a scalar and a uniform vector give the same result
+    @test sigma_penalty(fill(0.7, 4); target = 0.5) ≈
+          sigma_penalty(fill(0.7, 4); target = fill(0.5, 4))
+
+    @test_throws DimensionMismatch sigma_penalty([0.5, 0.5]; target = [0.3])
+    @test_throws ArgumentError sigma_penalty([0.5]; target = [0.0])
+    @test_throws ArgumentError sigma_penalty([0.5]; target = [-0.1])
+end
+
+@testset "SigmaDriveConfig validation" begin
+    @test SigmaDriveConfig() isa SigmaDriveConfig
+    @test SigmaDriveConfig(alpha = 0.0, beta = 0.0).alpha == 0.0
+
+    @test_throws ArgumentError SigmaDriveConfig(alpha = -1.0)
+    @test_throws ArgumentError SigmaDriveConfig(beta = -0.1)
+    @test_throws ArgumentError SigmaDriveConfig(baseline = 0.0)
+    @test_throws ArgumentError SigmaDriveConfig(sigma_lo = 0.5, sigma_hi = 0.3)
+    @test_throws ArgumentError SigmaDriveConfig(sigma_lo = 0.0)
+end
+
+@testset "mt_column_residuals" begin
+    g = _loss_grid()
+    sites = _loss_sites()
+    cells = [(2, 2), (3, 2)]
+
+    # a model that is the half-space the data came from has near-zero residuals
+    mu_true = fill(2.0, size(g))
+    res = mt_column_residuals(mu_true, g, sites, cells)
+    @test length(res) == 2
+    @test all(res .< 1e-3)
+
+    # a decade off produces a large residual
+    mu_wrong = fill(3.0, size(g))
+    res_wrong = mt_column_residuals(mu_wrong, g, sites, cells)
+    @test all(res_wrong .> 0.5)
+    @test all(res_wrong .> res)
+
+    @test_throws DimensionMismatch mt_column_residuals(mu_true, g, sites, [(1, 1)])
+    @test_throws DimensionMismatch mt_column_residuals(zeros(2, 2, 2), g, sites, cells)
+end
+
+@testset "compute_sigma_targets" begin
+    g = _loss_grid()
+    n = ncells(g)
+    sites = _loss_sites()
+    cells = [(2, 2), (3, 2)]
+    c = GravityCoupling(slope = -1.0)
+    A = gravity_matrix(g, [-300.0, 300.0], [0.0, 0.0], [0.0, 0.0])
+    ref = fill(2.0, n)
+
+    cfg = SigmaDriveConfig(alpha = 0.5, beta = 0.3, baseline = 0.15)
+
+    # with no data terms, every cell gets exactly `baseline`, clamped
+    targets_bare = PriorTargets()
+    st = compute_sigma_targets(fill(2.0, n), g, targets_bare, c; config = cfg)
+    @test all(st .≈ clamp(0.15, cfg.sigma_lo, cfg.sigma_hi))
+
+    # with MT: columns under sites get a higher σ than others when mu is wrong
+    targets_mt = PriorTargets(mt = (sites, cells))
+    mu_wrong = fill(3.0, n)
+    st_mt = compute_sigma_targets(mu_wrong, g, targets_mt, c; config = cfg)
+    # cells under sites should have higher sigma due to MT residual
+    li = LinearIndices(size(g))
+    under_site = [li[2, 2, k] for k in 1:size(g, 3)]
+    outside = setdiff(1:n, [li[i, j, k] for (i,j) in cells for k in 1:size(g, 3)])
+    @test mean(st_mt[under_site]) > mean(st_mt[outside])
+
+    # with gravity: cells far from stations should have lower sensitivity
+    targets_grav = PriorTargets(gravity = (A, [0.1, 0.1], [0.05, 0.05]),
+                                reference = ref)
+    st_grav = compute_sigma_targets(fill(2.0, n), g, targets_grav, c; config = cfg)
+    @test all(st_grav .>= cfg.sigma_lo)
+    @test all(st_grav .<= cfg.sigma_hi)
+    # should have variation (not all the same) due to gravity sensitivity
+    @test std(st_grav) > 0.0
+
+    # when mu is perfect, MT residuals are near zero → σ stays near baseline
+    targets_both = PriorTargets(mt = (sites, cells),
+                                gravity = (A, [0.1, 0.1], [0.05, 0.05]),
+                                reference = ref)
+    mu_good = fill(2.0, n)
+    st_good = compute_sigma_targets(mu_good, g, targets_both, c; config = cfg)
+    st_bad  = compute_sigma_targets(mu_wrong, g, targets_both, c; config = cfg)
+    @test mean(st_good) < mean(st_bad)
+
+    @test_throws DimensionMismatch compute_sigma_targets(fill(2.0, n - 1), g,
+                                                          targets_bare, c; config = cfg)
+end
+
+@testset "prior_loss with data-driven sigma_target_vec" begin
+    g = _loss_grid()
+    n = ncells(g)
+    mu = fill(2.0, n)
+    sigma = fill(0.5, n)
+    c = GravityCoupling(slope = -1.0)
+
+    # scalar target and matching uniform vector should give the same total
+    t_scalar = PriorTargets(sigma_target = 0.4)
+    t_vec = PriorTargets(sigma_target = 0.4, sigma_target_vec = fill(0.4, n))
+    @test prior_loss(mu, sigma, c, g, t_scalar) ≈
+          prior_loss(mu, sigma, c, g, t_vec)
+
+    # a non-uniform vector target should differ from the scalar
+    t_nonuniform = PriorTargets(sigma_target = 0.4,
+                                sigma_target_vec = [0.2 + 0.01i for i in 1:n])
+    @test prior_loss(mu, sigma, c, g, t_nonuniform) !=
+          prior_loss(mu, sigma, c, g, t_scalar)
+
+    # the sigma term in the report must reflect the vector target
+    r1 = loss_report(mu, sigma, c, g, t_scalar)
+    r2 = loss_report(mu, sigma, c, g, t_nonuniform)
+    @test r1.sigma != r2.sigma
 end
 
 @testset "prior_loss skips terms whose inputs are absent" begin

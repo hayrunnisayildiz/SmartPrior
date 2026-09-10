@@ -417,3 +417,76 @@ end
     @test isfile(path)
     @test load_prior(path).nin == net.nin
 end
+
+@testset "data-driven sigma targets via sigma_drive" begin
+    # build a problem where MT sites constrain some columns but not others
+    g = PriorGrid(fill(500.0, 4), fill(500.0, 4), [100.0, 150.0, 225.0];
+                  origin = [-1000.0, -1000.0, 0.0])
+    n = ncells(g)
+    periods = 10 .^ range(-2, 2; length = 8)
+    f = 1 ./ periods
+    a, p = mt1d_apparent(f, [100.0], Float64[])
+    sites = MTSites([-250.0, 250.0], [0.0, 0.0], periods, hcat(a, a), hcat(p, p))
+    cells = [(2, 2), (3, 2)]
+
+    obs = GravityObs([-400.0, 0.0, 400.0], [0.0, 0.0, 0.0], zeros(3),
+                     [-0.3, 0.8, -0.2], fill(0.05, 3))
+    s = build_features(g; gravity = obs, sites = sites)
+    X = encode_features(s; n_bands = 2)
+    A = gravity_matrix(g, obs.x, obs.y, obs.z)
+    reference = fill(2.0, n)
+
+    targets = PriorTargets(
+        gravity = (A, obs.value, obs.err),
+        mt = (sites, cells),
+        reference = reference,
+        sigma_target = 0.35,
+        sigma_drive = SigmaDriveConfig(alpha = 0.5, beta = 0.3, baseline = 0.15),
+    )
+
+    net = PriorNet(size(X, 1); width = 32, depth = 3,
+                   sigma_bounds = (0.05, 0.9))
+
+    cfg = TrainConfig(epochs = 100, learning_rate = 3.0e-3,
+                      log_every = 50, verbose = false, seed = 42,
+                      weights = LossWeights(gravity = 1.0, mt = 1.0,
+                                            smooth = 0.01, sigma = 0.1,
+                                            reference = 0.0))
+    res = train_prior(net, X, g, targets; config = cfg, offset = reference)
+
+    # 1. training should still converge
+    @test res.best_loss < res.history[1].total
+
+    # 2. history must contain sigma target statistics
+    h = res.history[end]
+    @test haskey(h, :sigma_target_mean)
+    @test haskey(h, :sigma_target_std)
+    @test isfinite(h.sigma_target_mean)
+    @test isfinite(h.sigma_target_std)
+
+    # 3. sigma targets should vary across cells (not all 0.35)
+    @test h.sigma_target_std > 0.0
+    @test h.sigma_target_mean != 0.35
+
+    # 4. network σ should track the data-driven map, not sit at 0.35
+    (mu, sigma), _ = predict(net, X, res.params.net, res.state; offset = reference)
+    @test std(sigma) > 0.01
+    @test !isapprox(median(sigma), 0.35; atol = 0.02)
+    st_final = compute_sigma_targets(collect(Float64, mu), g, targets,
+                                     coupling_of(res.params);
+                                     config = targets.sigma_drive)
+    @test cor(collect(Float64, sigma), st_final) > 0.2
+
+    # 5. backward compat: without sigma_drive, same setup gives no sigma_target_mean
+    #    and warns that σ will collapse to the scalar target
+    targets_old = PriorTargets(
+        gravity = (A, obs.value, obs.err),
+        mt = (sites, cells),
+        reference = reference,
+        sigma_target = 0.35,
+    )
+    res_old = @test_logs (:warn, r"sigma_drive") match_mode = :any begin
+        train_prior(net, X, g, targets_old; config = cfg, offset = reference)
+    end
+    @test !haskey(res_old.history[end], :sigma_target_mean)
+end

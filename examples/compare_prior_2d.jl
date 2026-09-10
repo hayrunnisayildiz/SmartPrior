@@ -158,11 +158,18 @@ A_grav = gravity_matrix(grid, gravity.x, gravity.y, gravity.z)
 site_cells = [(1, clamp(searchsortedlast(grid.y, y), 1, size(grid, 2)))
               for y in sites.y]
 
+# Anchors (borehole log10 ρ) are the only term that fits σ through the
+# heteroscedastic likelihood. This survey has none, so a scalar sigma_target
+# would make sigma_penalty pull every cell to 0.35. SigmaDriveConfig replaces
+# that constant with a per-cell map: columns whose 1-D response still disagrees
+# with the sounding stay wide, and cells the gravity operator barely sees stay
+# wide. The map is computed outside the AD graph each epoch.
 targets = PriorTargets(
     gravity = (A_grav, gravity.value, gravity.err),
     mt = (sites, site_cells),
     reference = vec(baseline),
     sigma_target = 0.35,
+    sigma_drive = SigmaDriveConfig(),
 )
 
 # residual_span has to exceed the largest departure from the baseline that the
@@ -227,6 +234,16 @@ a_ols = t̄ - b_ols * m̄
 @printf("prior OLS truth = a + b·μ:  a = %+.4f   b = %+.4f   RMSE = %.4f   corr = %.4f\n",
         a_ols, b_ols, rmse(truth.log_rho, bundle.mu),
         anomaly_correlation(truth.log_rho, bundle.mu))
+sig_mask = isfinite.(bundle.mu) .& isfinite.(truth.log_rho) .& isfinite.(bundle.sigma)
+sig_live = bundle.sigma[sig_mask]
+@printf("prior σ:  mean %.4f  std %.4f  corr(σ, |μ−truth|) %+.4f\n",
+        mean(sig_live), std(sig_live),
+        cor(sig_live, abs.(bundle.mu[sig_mask] .- truth.log_rho[sig_mask])))
+hσ = results[1].history[end]
+if haskey(hσ, :sigma_target_mean)
+    @printf("σ drive target (last log):  mean %.4f  std %.4f\n",
+            hσ.sigma_target_mean, hσ.sigma_target_std)
+end
 
 half_start = fill(HOST_LOG_RHO, size(grid))
 print_report(prior_report(truth,

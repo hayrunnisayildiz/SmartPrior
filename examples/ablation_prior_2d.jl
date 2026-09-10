@@ -140,6 +140,7 @@ targets = PriorTargets(
     mt = (sites, site_cells),
     reference = vec(baseline),
     sigma_target = 0.35,
+    sigma_drive = SigmaDriveConfig(),
 )
 
 net = PriorNet(size(X, 1);
