@@ -434,6 +434,69 @@ function nb_baseline(g::PriorGrid, sites::MTSites;
     return out
 end
 
+"""
+    nb_baseline_lateral_std(baseline) -> Float64
+
+Sample standard deviation of depth-averaged columns of an NB baseline (or any
+`nx×ny×nz` log₁₀ρ field). Measures column-to-column lateral spread — the part of
+the baseline that varies between soundings — without using any truth model.
+"""
+function nb_baseline_lateral_std(baseline::AbstractArray{<:Real,3})
+    nx, ny, nz = size(baseline)
+    n = nx * ny
+    n == 0 && return 0.0
+    col_means = Vector{Float64}(undef, n)
+    t = 0
+    @inbounds for j in 1:ny, i in 1:nx
+        t += 1
+        s = 0.0
+        for k in 1:nz
+            s += Float64(baseline[i, j, k])
+        end
+        col_means[t] = s / nz
+    end
+    n < 2 && return 0.0
+    return std(col_means)
+end
+
+"""
+    residual_span_half_band(log_rho_bounds) -> Float64
+
+Permissive, truth-free residual span: half the physical log₁₀ρ band width.
+
+This is the Musgrave rule of thumb (`log_rho_bounds = (0.5, 4.5)` → span `2.0`):
+the network may reach anywhere inside the physical band from a mid-band baseline,
+without being told how far the truth sits from that baseline.
+"""
+function residual_span_half_band(log_rho_bounds::Tuple{Real,Real})
+    lo, hi = Float64(log_rho_bounds[1]), Float64(log_rho_bounds[2])
+    lo < hi || throw(ArgumentError(
+        "residual_span_half_band: log_rho_bounds must be increasing, got $(log_rho_bounds)"))
+    return 0.5 * (hi - lo)
+end
+
+"""
+    residual_span_from_baseline(baseline; k=3.0, floor=1.0, ceil=5.0) -> Float64
+
+Data-driven residual span from lateral NB spread: `clamp(k · σ_lat, floor, ceil)`,
+where `σ_lat` is [`nb_baseline_lateral_std`](@ref).
+
+Portable to field surveys (no truth). `k` is an external multiplier, not fit to
+truth; `floor` / `ceil` keep the reachable band usable when the baseline is
+almost uniform or wildly variable.
+"""
+function residual_span_from_baseline(baseline::AbstractArray{<:Real,3};
+                                     k::Real = 3.0,
+                                     floor::Real = 1.0,
+                                     ceil::Real = 5.0)
+    k > 0 || throw(ArgumentError("residual_span_from_baseline: k must be positive"))
+    floor > 0 || throw(ArgumentError("residual_span_from_baseline: floor must be positive"))
+    ceil >= floor || throw(ArgumentError(
+        "residual_span_from_baseline: ceil must be ≥ floor, got floor=$(floor) ceil=$(ceil)"))
+    span = float(k) * nb_baseline_lateral_std(baseline)
+    return clamp(span, float(floor), float(ceil))
+end
+
 #---------- channel builders ----------
 
 # default multi-scale smoothing lengths, as multiples of the median horizontal

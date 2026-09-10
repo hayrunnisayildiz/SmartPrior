@@ -88,12 +88,20 @@ targets = PriorTargets(
 
 #---------- 11–13. train ----------
 
-# residual_span = 2.0: two decades of departure from the Niblett-Bostick
-# baseline, which is the range log_rho_bounds = (0.5, 4.5) can actually host.
+# Truth-free residual_span protocol (same helpers as the synthetic blind run):
+# half_band = half of log_rho_bounds width; from_baseline = k·σ_lat of NB columns.
+# Training uses half_band (permissive, portable). from_baseline is logged only.
+const LOG_RHO_BOUNDS = (0.5, 4.5)
+const RESIDUAL_SPAN = residual_span_half_band(LOG_RHO_BOUNDS)
+const SPAN_FROM_BASELINE = residual_span_from_baseline(baseline; k = 3.0, floor = 1.0, ceil = 5.0)
+@printf("residual_span protocol: half_band=%.3f  from_baseline=%.3f  (σ_lat=%.4f)\n",
+        RESIDUAL_SPAN, SPAN_FROM_BASELINE, nb_baseline_lateral_std(baseline))
+# slope_bounds sign: external geological prior (clay/basin fill = conductive, less
+# dense) — not a data-derived value. Magnitude is a wide holding band.
 net = PriorNet(size(X, 1);
                width = 96, depth = 4,
-               log_rho_bounds = (0.5, 4.5),
-               residual_span = 2.0,
+               log_rho_bounds = LOG_RHO_BOUNDS,
+               residual_span = RESIDUAL_SPAN,
                sigma_bounds = (0.05, 0.9))
 
 config = TrainConfig(
@@ -120,7 +128,7 @@ ensemble, results = train_ensemble(net, X, grid, targets;
 bundle = prior_from_ensemble(grid, ensemble, X;
                              offset = vec(baseline),
                              k = 2.0,
-                             log_rho_bounds = (0.5, 4.5))
+                             log_rho_bounds = LOG_RHO_BOUNDS)
 paths = write_prior(joinpath(WORK, "prior"), bundle)
 @info "prior written" paths.rho paths.lo paths.hi
 

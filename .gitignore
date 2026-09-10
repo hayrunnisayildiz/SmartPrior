@@ -24,6 +24,9 @@ tmp_seed*/
 tmp_misspec_grav/
 tmp_review/
 tmp_ablation/
+tmp_blind*/
+tmp_bestcase*/
+tmp_blind_vs_bestcase_metrics.tsv
 *_run.log
 *.dat
 tmp_score_seed_repeat.log

@@ -58,6 +58,7 @@ export skin_depth, bostick_depth, bostick_resistivity, niblett_bostick
 # observations and features
 export GravityObs, MTSites, FeatureStack
 export nsites, nchannels, build_features, feature_matrix, nb_baseline
+export nb_baseline_lateral_std, residual_span_half_band, residual_span_from_baseline
 export standardize, extrude, idw_to_grid, gaussian_smooth_xy, gradient_xy
 export gravity_channels, topography_channels, depth_channels, coverage_channels
 

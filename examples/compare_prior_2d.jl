@@ -172,11 +172,9 @@ targets = PriorTargets(
     sigma_drive = SigmaDriveConfig(),
 )
 
-# residual_span has to exceed the largest departure from the baseline that the
-# truth actually contains. The slab is two decades below the host, and a baseline
-# sitting near the host level therefore needs a span well past 2; a span of 1.5
-# would make the correct answer unreachable and the network would saturate
-# against the bound instead.
+# residual_span: published best-case uses 2.5 (large enough for a two-decade
+# slab under a host-level baseline). For a truth-free alternative see
+# examples/train_prior_blind.jl (half_band / from_baseline protocol).
 net = PriorNet(size(X, 1);
                width = 96, depth = 4,
                log_rho_bounds = (0.0, 4.0),
@@ -188,12 +186,11 @@ net = PriorNet(size(X, 1);
 # smoothness weight is then raised until the reported gravity term stops falling
 # below one, which is the point where it would be fitting noise by contorting the
 # field. `saturation` in the log should stay near zero throughout.
-# The slope bound is the single most important setting here. The target is a
-# conductive body that is also dense, so the coupling must be negative; the
-# magnitude stays free within a range that spans plausible petrophysics. Without
-# this the fit reaches the same gravity misfit with a positive slope, putting
-# resistive material where the mass is and returning a prior anti-correlated with
-# the truth. Gravity alone cannot tell the two apart.
+# The slope *sign* is an external design assumption for this synthetic (dense
+# body is conductive), not fit to the numerical truth contrast. The published
+# magnitude band (-4, -0.2) is tighter than the blind holding band (-10, -0.1);
+# without any sign constraint the fit can reach the same gravity misfit with a
+# positive slope, putting resistive material where the mass is.
 config = TrainConfig(
     epochs = 3000,
     learning_rate = 3.0e-3,

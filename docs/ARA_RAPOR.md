@@ -4,7 +4,9 @@
 **Ne:** 2B manyetotellürik (MT) ters çözümü için öğrenilmiş **warm-start prior**
 **Sürüm:** 0.1.0 · Julia 1.10 · Lux.jl + Zygote + MTGeophysics 0.5.0
 **Tarih:** 9 Eylül 2026
-**Kaynak:** `tmp_noisy_v2`, `tmp_seed2_v2`, `tmp_seed3_v2`, `tmp_ablation`, `tmp_musgrave`, `tmp_musgrave_coarse` — sayılar ilgili `metrics.txt` / `Summary.md` dosyalarından.
+**Kaynak:** `tmp_noisy_v2`, `tmp_seed2_v2`, `tmp_seed3_v2`, `tmp_blind_t{1,2,3}`,
+`tmp_bestcase_t1`, `tmp_ablation`, `tmp_musgrave`, `tmp_musgrave_coarse` — sayılar
+ilgili `metrics.txt` / `Summary.md` dosyalarından.
 
 Bu bir **joint inversion değildir.** Füzyon yalnızca başlangıç modeli üretilirken olur; VFSA çözücüsüne dokunulmaz.
 
@@ -131,7 +133,57 @@ Okuma notu:
 - Data RMS, model RMSE değildir. VFSA veriye uyar; truth’a RMSE’nin iterasyon boyunca bozulması beklenen bir durum olabilir (gürültüye uydurma).
 - Tablodaki koşular **düzgün σ** (`sigma_target = 0.35`, `sigma_drive` kapalı) ile alındı. Kod artık `SigmaDriveConfig` kullanıyor; `mean(σ) ≈ 0.36` ve `corr(σ, |res|) = +0.09` o eski konfigürasyona aittir, yeniden ölçülmedi.
 
-### 4.1 Görsel: aynı bütçe, iki başlangıç (seed 3)
+### 4.1 Best-case vs blind hiperparametre (model uzayı)
+
+İki ayrı tablo — karıştırmayın. Aynı 3 seed (`t1/t2/t3` seed seti), eğitim-only
+(`examples/train_prior_blind.jl`), VFSA yok. Fark yalnızca `residual_span` ve
+`slope_bounds`. §4 ana tablosundaki VFSA satırlarıyla karıştırmayın.
+
+**Protokol (truth’suz, sahaya taşınabilir):**
+
+| hiperparametre | best-case | blind |
+|---|---|---|
+| `residual_span` | 2.5 | `residual_span_half_band(log_rho_bounds)` = 2.0 |
+| `slope_bounds` | `(-4, −0.2)` | `(-10, −0.1)` |
+| işaret gerekçesi | sentetik tasarım (yoğun=iletken slab) — dışsal varsayım | aynı; büyüklük geniş tutucu bant |
+
+`residual_span_from_baseline` (`k·σ_lat`, Features.jl) aynı kodla hesaplanır; bu
+sentetikte `σ_lat ≈ 0.17` → k=3 ile floor=1.0’a oturur. Blind koşu half_band’i
+kullanır (izin verici). Musgrave örnekleri de aynı half_band kuralını çağırır.
+
+#### Best-case — yöntemin üst sınırı (uygun hiperparametrelerle)
+
+Yayımlanan `tmp_*_v2` prior satırları (§4). Eşleşmiş yeniden-koşu
+(`SMARTPRIOR_PROTOCOL=bestcase`, aynı kod + `SigmaDriveConfig`): t1 RMSE 0.544 /
+corr 0.438 — yayımlananla bit-düzeyinde uyumlu; σ-drive bu karşılaştırmayı
+bozmuyor.
+
+| metrik | t1 | t2 | t3 | **ort ± std** |
+|---|---:|---:|---:|---:|
+| prior RMSE | 0.546 | 0.554 | 0.539 | **0.546 ± 0.008** |
+| prior korelasyon | 0.438 | 0.439 | 0.453 | **0.443 ± 0.008** |
+
+#### Blind — gerçekçi, truth-bağımsız protokol
+
+Kaynak: `tmp_blind_t1`–`t3` (`SMARTPRIOR_PROTOCOL=blind`).
+
+| metrik | t1 | t2 | t3 | **ort ± std** |
+|---|---:|---:|---:|---:|
+| prior RMSE | 0.517 | 0.520 | 0.515 | **0.518 ± 0.003** |
+| prior korelasyon | 0.498 | 0.497 | 0.509 | **0.501 ± 0.007** |
+
+**Bulgu:** Blind, best-case’i bozmuyor — model-uzayı RMSE/korelasyon **daha iyi**
+(RMSE −0.029, corr +0.058 ort.). Kazanım oracle hiperparametreye bağlı değildi;
+tersine, dar `(-4, −0.2)` bandı ve/veya span=2.5 bu metriklerde üst sınır değil.
+NB’ye göre corr kazanımı korunuyor (blind 0.501 vs NB 0.429). Bu, leakage
+endişesini “kritik”ten “hafif”e indirir (ortadan kaldırmaz: işaret hâlâ dışsal
+varsayım).
+
+Duyarlılık taraması: `examples/train_prior_sensitivity.jl`
+(`residual_span ∈ {1.0…5.0}` × üç slope genişliği). Beklenen şekil: geniş plato,
+2.5’te keskin tepe değil — koşu sonuçları eklenecek.
+
+### 4.2 Görsel: aynı bütçe, iki başlangıç (seed 3)
 
 Yarı-uzaydan VFSA sonucu (ensemble mean):
 
@@ -252,6 +304,10 @@ Profile2D.jl              2B sürücü
 4. Gravite derinlik körü: tek 2B harita her kata kopyalanır.
 5. `RealDataIO.jl` Musgrave’e özgü.
 6. Slab eğimi iddiası **geri çekildi**.
+7. `slope_bounds` işareti dışsal jeolojik/tasarım varsayımıdır (veri-türevi değil).
+   Büyüklük için truth-bağımsız tutucu bant: sentetik blind `(-10, −0.1)`,
+   Musgrave `(0, 1.5)`. `residual_span` için half_band / `from_baseline` protokolü
+   (§4.1); yayımlanan span=2.5 best-case üst sınırdır.
 
 ---
 
@@ -263,11 +319,14 @@ Profile2D.jl              2B sürücü
 4. Seed 3 kesitleri + yakınsama figürleri.
 5. Ablasyon A/B/C/D (§5) — “MLP, doğrusal LS’den ölçülebilir kazanç.”
 6. Musgrave hız iddiası + kaba-ağ negatif sonuç (§6).
-7. Ne kanıtlanmadı (§3, §8).
+7. Best-case vs blind hiperparametre (§4.1).
+8. Ne kanıtlanmadı (§3, §8).
 
 Tekrarlanabilir koşu:
 
 ```bash
 julia --project=. examples/compare_prior_2d.jl
 julia --project=. examples/ablation_prior_2d.jl
+SMARTPRIOR_PROTOCOL=blind SMARTPRIOR_WORK=tmp_blind_t1 \
+  julia --project=. examples/train_prior_blind.jl
 ```

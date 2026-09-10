@@ -176,6 +176,28 @@ end
     @test all(log10(10.0) - 0.1 .<= base .<= log10(1000.0) + 0.1)
 end
 
+@testset "truth-free residual_span helpers" begin
+    @test residual_span_half_band((0.0, 4.0)) == 2.0
+    @test residual_span_half_band((0.5, 4.5)) == 2.0
+    @test_throws ArgumentError residual_span_half_band((4.0, 0.0))
+
+    uniform = fill(2.0, 2, 4, 3)
+    @test nb_baseline_lateral_std(uniform) == 0.0
+    @test residual_span_from_baseline(uniform; k = 3.0, floor = 1.0, ceil = 5.0) == 1.0
+
+    varying = zeros(1, 4, 2)
+    varying[1, 1, :] .= 1.0
+    varying[1, 2, :] .= 2.0
+    varying[1, 3, :] .= 3.0
+    varying[1, 4, :] .= 4.0
+    σ = nb_baseline_lateral_std(varying)
+    @test σ ≈ std([1.0, 2.0, 3.0, 4.0])
+    @test residual_span_from_baseline(varying; k = 2.0, floor = 0.5, ceil = 10.0) ≈ 2.0 * σ
+    @test residual_span_from_baseline(varying; k = 100.0, floor = 1.0, ceil = 2.5) == 2.5
+    @test_throws ArgumentError residual_span_from_baseline(varying; k = 0.0)
+    @test_throws ArgumentError residual_span_from_baseline(varying; floor = 3.0, ceil = 1.0)
+end
+
 @testset "channel builders" begin
     g = _test_grid()
     nx, ny, nz = size(g)
