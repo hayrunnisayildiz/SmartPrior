@@ -13,6 +13,10 @@ using SmartPriorMT
 using MTGeophysics
 using Printf
 using Plots
+
+# Headless GR. Without this the second savefig can hang when stdout is a pty
+# (`send: No buffer space available`).
+get!(ENV, "GKSwstype", "100")
 gr()
 
 const WORK = get(ENV, "SMARTPRIOR_WORK", "")
@@ -63,60 +67,67 @@ z_km = grid.cz ./ 1000
 
 as_heatmap(A) = permutedims(A[1, :, :], (2, 1))   # [nz, ny] for heatmap(y, z, Z)
 
-# Her veri paneli colorbar=false: renk skalasını hiçbir panele gömmüyoruz, o
-# yüzden 5 panel de (truth, A, B, C, D) tam eşit genişlikte kalıyor -- önceki
-# sürümde D'nin "ezik" görünmesinin sebebi tam olarak buydu (colorbar o
-# panelin kendi genişliğinden yer çalıyordu).
-function panel(A, title)
+# Colorbar on the last panel of each row; that column is wider so D's heatmap
+# stays the same width as A–C. Do not use a 7%-width dummy colorbar subplot:
+# GR then emits invalid viewports and the strip steals a data slot.
+#
+# Top-row x-labels must be off — they collide with the bottom-row titles.
+# `plot_title` needs an explicit gap or it sits on the first-row titles.
+function panel(A, title; colorbar = false, ylabel = "depth (km)", xlabel = "y (km)")
     heatmap(y_km, z_km, as_heatmap(A);
             clims = CLIMS, c = :Spectral, yflip = true,
             ylims = (0, maximum(z_km)), xlims = (minimum(y_km), maximum(y_km)),
-            colorbar = false,
-            title = title, titlefontsize = 9,
-            xlabel = "y (km)", ylabel = "depth (km)",
+            colorbar = colorbar,
+            colorbar_title = colorbar ? "log₁₀ ρ" : "",
+            title = title, titlefontsize = 12,
+            xlabel = xlabel, ylabel = ylabel,
+            guidefontsize = 9, tickfontsize = 8,
             framestyle = :box, legend = false)
 end
 
-# ayrı, ince bir "sadece renk skalası" paneli -- veri panellerinin genişliğini
-# etkilemesin diye kendi dar sütununda duruyor
-function colorbar_only()
-    strip = reshape(range(CLIMS[1], CLIMS[2]; length = 256), :, 1)
-    heatmap(strip; c = :Spectral, clims = CLIMS, colorbar = true,
-            colorbar_title = "log₁₀ ρ", xaxis = false, yaxis = false,
-            legend = false, framestyle = :none)
-end
+lyt = @layout [a{0.175w} b{0.175w} c{0.175w} d{0.175w} e{0.30w}
+               f{0.175w} g{0.175w} h{0.175w} i{0.175w} j{0.30w}]
 
-top_panels = Any[panel(truth_field, "TRUTH")]
-for arm in ARMS
-    push!(top_panels, panel(starts[arm.key], "$(arm.label) — başlangıç"))
-end
-push!(top_panels, colorbar_only())
-
-bottom_panels = Any[panel(truth_field, "TRUTH")]
-for arm in ARMS
-    push!(bottom_panels, panel(results[arm.key], "$(arm.label) — VFSA sonucu"))
-end
-push!(bottom_panels, colorbar_only())
-
-plt = plot(top_panels[1:5]..., bottom_panels[1:5]..., colorbar_only();
-           layout = (2, 6),
-           size = (2200, 700),
-           left_margin = 5Plots.mm,
-           bottom_margin = 5Plots.mm,
-           plot_title = "Ablasyon: TRUTH vs A/B/C/D  (üst=başlangıç, alt=VFSA sonucu, ortak skala $(CLIMS[1])-$(CLIMS[2]))")
+plt = plot(
+    panel(truth_field, "TRUTH"; xlabel = ""),
+    panel(starts[:A], "A start"; ylabel = "", xlabel = ""),
+    panel(starts[:B], "B start"; ylabel = "", xlabel = ""),
+    panel(starts[:C], "C start"; ylabel = "", xlabel = ""),
+    panel(starts[:D], "D start"; colorbar = true, ylabel = "", xlabel = ""),
+    panel(truth_field, "TRUTH"),
+    panel(results[:A], "A VFSA"; ylabel = ""),
+    panel(results[:B], "B VFSA"; ylabel = ""),
+    panel(results[:C], "C VFSA"; ylabel = ""),
+    panel(results[:D], "D VFSA"; colorbar = true, ylabel = "");
+    layout = lyt,
+    size = (2600, 920),
+    left_margin = 8Plots.mm,
+    right_margin = 4Plots.mm,
+    top_margin = 8Plots.mm,
+    bottom_margin = 6Plots.mm,
+    plot_title = "Ablasyon: A yarı-uzay · B NB · C NB+doğrusal · D tam prior   (üst=başlangıç, alt=VFSA, log₁₀ ρ $(CLIMS[1])–$(CLIMS[2]))",
+    plot_titlefontsize = 14,
+    plot_titlegap = 12,
+)
 
 out = joinpath(WORK, "ablation_comparison.png")
 savefig(plt, out)
 @info "wrote" out bytes = filesize(out)
 
-# tek başına, sadece VFSA sonuçlarının yan yana karşılaştırması (rapor için)
-plt2 = plot(panel(truth_field, "TRUTH"),
-            [panel(results[arm.key], "$(arm.label)") for arm in ARMS]...,
-            colorbar_only();
-            layout = (1, 6),
-            size = (2200, 400),
-            left_margin = 5Plots.mm, bottom_margin = 8Plots.mm,
-            plot_title = "VFSA sonuçları: TRUTH vs A/B/C/D")
+lyt2 = @layout [a{0.175w} b{0.175w} c{0.175w} d{0.175w} e{0.30w}]
+plt2 = plot(
+    panel(truth_field, "TRUTH"),
+    panel(results[:A], "A VFSA"; ylabel = ""),
+    panel(results[:B], "B VFSA"; ylabel = ""),
+    panel(results[:C], "C VFSA"; ylabel = ""),
+    panel(results[:D], "D VFSA"; colorbar = true, ylabel = "");
+    layout = lyt2,
+    size = (2600, 500),
+    left_margin = 8Plots.mm,
+    right_margin = 4Plots.mm,
+    top_margin = 4Plots.mm,
+    bottom_margin = 8Plots.mm,
+)
 out2 = joinpath(WORK, "ablation_results_only.png")
 savefig(plt2, out2)
 @info "wrote" out2 bytes = filesize(out2)
