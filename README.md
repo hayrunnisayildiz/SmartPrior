@@ -1,17 +1,19 @@
 # SmartPriorMT
 
-2B manyetotellürik (MT) ters çözümü için, homojen yarı-uzay başlangıcı
-yerine, gravite + topografya + MT'nin kendi Niblett-Bostick dönüşümünden
-hücre-bazlı bir başlangıç modeli (μ, σ) üretir. Bu model VFSA çözücüsüne
-warm-start olarak verilir.
+2B manyetotellürik (MT) ters çözümü için **warm-start prior**. Homojen yarı-uzay
+yerine, gravite + gözlenen MT’nin Niblett–Bostick (NB) dönüşümü (+ isteğe bağlı
+topoğrafya) ile hücre-bazlı bir nominal log₁₀ ρ (`μ`) üretir ve bunu
+MTGeophysics VFSA’sına başlangıç modeli olarak verir.
 
-**Bu bir joint inversion DEĞİLDİR.** Füzyon yalnızca prior üretim
-aşamasında olur; VFSA çözücüsüne dokunulmaz.
+**Bu bir joint inversion değildir.** Gravite VFSA χ²’sine girmez; füzyon yalnızca
+prior üretiminde olur. Çözücünün ileri fiziği, pertürbasyonu ve soğuma çizelgesi
+değiştirilmez. `σ` (`prior.std`, `prior.lo` / `prior.hi`) yazılır ama mevcut
+`VFSA2DMT` global `log_bounds` kullanır — hücre aralığı inversiyona girmez.
 
-### Kurulum
+Sürüm 0.1.0 · Julia 1.10 · MTGeophysics 0.5.0. Tam tablo, figür ve sunum sırası:
+[`docs/ARA_RAPOR.md`](docs/ARA_RAPOR.md).
 
-Julia 1.10 veya üzeri gerekir. Depoyu klonladıktan sonra paket ortamını
-kurun:
+## Kurulum
 
 ```julia
 using Pkg
@@ -19,14 +21,11 @@ Pkg.activate(".")
 Pkg.instantiate()
 ```
 
-Başka bir Julia projesinden yerel yolu eklemek için:
+Yerel yol:
 
 ```julia
-using Pkg
 Pkg.add(path="path/to/SmartPriorModel")
 ```
-
-`Project.toml` bağımlılıkları ve `compat` sınırları:
 
 | Paket | Compat |
 |---|---|
@@ -42,103 +41,109 @@ Pkg.add(path="path/to/SmartPriorModel")
 | Zygote | 0.7.12 |
 | julia | 1.10 |
 
-Standart kütüphane bağımlılıkları (compat yok): `LinearAlgebra`, `Printf`,
-`Random`, `Statistics`.
+Stdlib (compat yok): `LinearAlgebra`, `Printf`, `Random`, `Statistics`.
 
-### Hızlı örnek
-
-`examples/compare_prior_2d.jl` sentetik bir 2B doğrulama koşar. MTGeophysics
-ağında eğimli iletken bir slab truth'u kurar; 2B sonlu-hacim çözücüsünden
-gürültülü MT gözlemleri ve truth'un (özdirençten bağımsız) yoğunluğundan
-gravite üretir. Gravite ve gözlenen MT'nin Niblett-Bostick dönüşümünden,
-truth'u hiç görmeden bir smart prior eğitilir. Aynı VFSA ayarları ve seed ile
-iki ters çözüm koşulur — biri homojen yarı-uzaydan, biri prior'dan — ve her
-ikisi truth'a karşı skorlanır.
+## Hızlı örnek
 
 ```bash
 julia --project=. examples/compare_prior_2d.jl
 ```
 
-Birkaç dakika sürer; sürenin çoğu iki ters çözümde geçer.
+Sentetik eğimli iletken slab; 2B sonlu-hacim MT + bağımsız yoğunluktan gravite.
+Prior truth’u görmez. Aynı VFSA ayarı ve seed ile iki koşu: yarı-uzay vs prior.
+Sürenin çoğu inversiyonda geçer.
 
-### Mimari
-FeatureStack (gravite+MT+NB+topografya kanalları) → Lux.jl koordinat-ağı
-(residual-mode, NB baseline'a göre öğrenilen düzeltme) → PriorBundle (μ,σ)
-→ VFSA warm-start.
+Truth-bağımsız hiperparametre (eğitim only, VFSA yok):
 
-### Doğrulama Durumu
+```bash
+SMARTPRIOR_PROTOCOL=blind SMARTPRIOR_WORK=tmp_blind_t1 \
+  julia --project=. examples/train_prior_blind.jl
+```
 
-**Sentetik (truth bilinir):**
-- RMS iter1: yarı-uzay 30.260±0.019, prior 4.558±0.080 (~150 std fark).
-  RMS iter400: yarı-uzay 4.995±0.347, prior 3.744±0.340 (artık anlamlı).
-  Prior ham RMSE 0.546±0.008 vs NB baseline 0.551±0.005 (çok yakın, kesin
-  üstünlük yok, seed'e göre değişiyor). Korelasyon 0.443±0.008 vs NB
-  0.428±0.002 (net üstünlük, aralıklar örtüşmüyor). 3 bağımsız zincirle,
-  güncel kodla doğrulandı.
-- Kalibrasyon: reference=0.1 en dengeli nokta (tek seed).
+## Mimari
 
-Ablasyon (`examples/ablation_prior_2d.jl`): aynı sentetik veri ve VFSA
-ayarlarıyla dört başlangıç — A yarı-uzay, B NB-bedava, C NB+doğrusal
-gravite, D tam prior. Üst satır başlangıç, alt satır VFSA sonucu:
+```
+FeatureStack → Lux koordinat-ağı (NB’ye residual) → PriorBundle (μ, σ)
+            → start_prior.rho → VFSA2DMT
+```
 
-![Ablasyon: TRUTH vs A/B/C/D, üst=başlangıç alt=VFSA](docs/ablation_comparison.png)
+2B profilde `x_norm` ve `gravity_dx` tanım gereği sıfır → **efektif 12 kanal**
+(14 değil). Sentetik yolda topo kanalı yok; Musgrave DEM’i `surface_z` olarak
+verir. VFSA ileri çözümü düz-datum varsayar.
 
-Yalnızca VFSA sonuçları:
+Kayıp etiketsiz ve AD-güvenli: prizma gravite, 1B MT kolon, pürüzlülük, `σ`
+hedefi (`SigmaDriveConfig`; likelihood değil). `slope` işareti dışsal varsayım
+(sentetikte yoğun=iletken); büyüklük kör protokolde geniş tutucu bant.
 
-![VFSA sonuçları: TRUTH vs A/B/C/D](docs/ablation_results_only.png)
+Bu sürücü sonlu bütçede start-bağımlıdır (`max_iter=400`, `step_scale=0.11`,
+geometrik soğuma). Kanonik küresel VFSA (Ingber / Sen & Stoffa) iddiası yoktur.
 
-**Gerçek veri (Musgrave Province, AusLAMP, Avustralya — truth YOK):**
-- Üç bağımsız kalibrasyon hatası bulunup düzeltildi: MT empedans birimi
-  (mV/km/nT, SI değil), gravite hata kaynağı (ölçüm hassasiyeti ≠ model
-  hatası, %135× fark), MT hata bütçesi (aynı sorun, ~%40 model payı).
-- Gravite-direnç eğim işareti (pozitif, Giles Complex) literatürle
-  doğrulandı.
-- target_rms=1.0 duman testinde (max_iter=100) prior 5-6 iterasyonda
-  hedefe ulaştı, yarı-uzay 100 iterasyonda bile ulaşamadı (en iyi
-  1.09-1.19). Ayrı bir tam-bütçe koşusunda (target_rms=0.1, max_iter=400,
-  erken durma kapalı) ikisi de 0.1'e ulaşamadı; prior 0.911'de, yarı-uzay
-  1.040'ta durdu. Bu, `model_err_frac=0.4` ile χ²/datum≈1 tabanı (RMS=1,
-  N=414 TE-only ZXY); 0.911 tıkanıklık değil, bütçeye oturma.
-- ❌ Prior'ın NİHAİ KALİTESİ (yarı-uzaydan daha doğru mu) kanıtlanamadı
-  — truth yok, düşük RMS/yüksek pürüzlülük ayırt edilemiyor.
+## Doğrulama
 
-### Bilinen Sınırlamalar
-- Tek küresel gravite-özdirenç eğimi → tek baskın litoloji varsayımı.
-  Karışık litolojide (Musgrave'de olduğu gibi, dirençli Giles kütleleri +
-  iletken fay zonları) zorlanır.
-- TE-only (TM incelendi, v0.1.0'a alınmadı; bkz. Açık Sorular / v0.2 Adayları).
-- VFSA'nın kendi ileri fiziği düz-datum varsayıyor; surface_z sadece
-  prior üretiminde kullanılıyor, VFSA'nın kendisine girmiyor.
-- σ, anchor yokken likelihood ile fit edilmez. `SigmaDriveConfig` MT kolon
-  artığı ve gravite duyarlılığından hücre-bazlı bir hedef üretir; `sigma_penalty`
-  σ'yı o haritaya çeker (`examples/compare_prior_2d.jl`). Heteroscedastic NLL
-  yalnızca anchor hücrelerinde çalışır.
-- Gravite tarafında operatör-düzeyinde ters suç var (bilerek, petrofizik
-  bağımsız); MT'de yok.
-- `RealDataIO.jl` şu an Musgrave'e özgü (hardcoded); genel bir "kendi
-  verini getir" API'sine dönüştürülmedi.
-- BoundedVFSA.jl kapsam dışı: 3B için hazırlanmış, hiç kullanılmamış,
-  kanıtsız.
+Kaynak koşular ve std: [`docs/ARA_RAPOR.md`](docs/ARA_RAPOR.md) §4–§6.
+Tek seed iddia sayılmaz. Data RMS, model RMSE değildir.
 
-### Açık Sorular / v0.2 Adayları
+### Sentetik — 3 seed (VFSA, chain 1)
 
-TM verisi mevcut ve faz tensörü skew analiziyle (medyan β=2.9°, %76
-<5°) çoğunlukla 2B-uyumlu bulundu, ancak TM'nin model-temsil hatası
-TE'nin ~3 katı ve istasyonlar arası çok heterojen (SA348: 2.63 decade
-artık, SA347: 0.18 decade) -- SA350/WA44/SA348 tekrarlayan şekilde
-sorunlu çıkıyor, muhtemelen gerçek 3B/galvanik distorsiyon sinyali.
-Tek bir global model_err_frac ile kalibre edilemez; istasyon-bazlı
-inceleme veya bu istasyonların dışlanması gerekir. v0.2 adayı.
+| | yarı-uzay | prior |
+|---|---:|---:|
+| data RMS, iter 1 | 30.260 ± 0.019 | **4.558 ± 0.080** |
+| data RMS, iter 400 | 4.995 ± 0.347 | **3.744 ± 0.340** |
 
-Mesh çözünürlüğü test edildi (5km vs 20km) -- kaba ağda (20km) prior,
-yarı-uzaydan DAHA KÖTÜ sonuç verdi (best_rms 2.497 vs 2.299) -- doğru
-çözünürlük bulunamadı, sistematik tarama gerekiyor (v0.2).
+Iter 1 farkı stokastik değil (iki başlangıcın ileri çözümü).
 
-### MTGeophysics.jl İlişkisi
-Bağımsız bir ekosistem paketi (MTGeophysics'e bağımlı, kod değişikliği
-değil). Ayrı bir upstream PR adayı var (solve_mt1d_analytical'daki
-Float64 cast'inin kaldırılması, ForwardDiff uyumluluğu için) — henüz
-gönderilmedi.
+| | NB | prior |
+|---|---:|---:|
+| RMSE (log₁₀ ρ) | 0.551 ± 0.004 | 0.546 ± 0.008 |
+| korelasyon | 0.429 ± 0.002 | **0.443 ± 0.008** |
 
-### Lisans
-MIT, bkz. LICENSE.
+Prior, ham RMSE’de NB’yi kesin geçmez. Kazanç korelasyonda. 3-seed VFSA tablosu
+düzgün-σ koşularından; kod artık `SigmaDriveConfig` kullanıyor.
+
+**Blind** (`residual_span` = half_band, `slope_bounds = (-10, −0.1)`, eğitim
+only): RMSE **0.518 ± 0.003**, korelasyon **0.501 ± 0.007**. Oracle span=2.5
+kazancı taşımıyor. İşaret hâlâ dışsal varsayım.
+
+`reference = 0.1` en dengeli kalibrasyon noktası — **tek seed**.
+
+### Ablasyon
+
+Aynı sentetik + VFSA, dört başlangıç (`examples/ablation_prior_2d.jl`): A
+yarı-uzay, B NB, C NB+doğrusal gravite, D tam prior. **Tek seed.**
+
+![Ablasyon: TRUTH vs A/B/C/D](docs/figures/ablation_comparison.png)
+
+![Yalnızca VFSA sonuçları](docs/figures/ablation_results_only.png)
+
+### Musgrave (AusLAMP) — truth yok
+
+Nihai yeraltı kalitesi iddia edilemez. Ölçülen şey veriye uyum hızı.
+
+Tam bütçe (`max_iter=400`, erken durma kapalı): prior 5. iterasyonda RMS 1.0
+altına iner, plato **0.911**; yarı-uzay final **1.040**. Plato arama tıkanıklığı
+değil: `model_err_frac=0.4`, N=414, χ²/datum=1 tam RMS=1. Kaba ağda (20 km)
+prior **daha kötü** (best RMS 2.497 vs 2.299).
+
+## Sınırlamalar
+
+- Tek küresel gravite–özdirenç eğimi → tek baskın litoloji. Karışık litolojide
+  (Musgrave: dirençli Giles + iletken zon) zorlanır.
+- TE-only. TM mevcut ama istasyon-bazlı model hatası tek `model_err_frac` ile
+  kalibre edilemiyor (v0.2).
+- `σ` inversiyona girmez; anchor yokken NLL yok. `sigma_penalty` AD-dışı hedef
+  haritayı izler. `corr(σ, |hata|)` sigma_drive ile yeniden ölçülmedi.
+- Gravite: operatör-düzeyinde ters suç (bilerek); petrofizik yok. MT’de yok.
+- Gravite her kata sönümsüz kopyalanır (derinlik körü).
+- `RealDataIO.jl` Musgrave’e özgü.
+- `BoundedVFSA.jl` yazıldı, 2B/3B yolda kullanılmadı, kanıtsız.
+- Slab eğimi iddiası **geri çekildi** (işaret seed’e göre değişiyor).
+
+## MTGeophysics.jl
+
+Bağımlılık; bu paket çözücüyü çatallamaz. `solve_mt1d_analytical` içindeki
+`Float64` cast’i ForwardDiff’i kırıyor — `MT1DAD.jl` bu yüzden var. Upstream PR
+aday; henüz gönderilmedi (önce Pankaj K. Mishra).
+
+## Lisans
+
+MIT, bkz. [LICENSE](LICENSE).
