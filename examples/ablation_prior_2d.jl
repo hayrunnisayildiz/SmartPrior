@@ -17,6 +17,10 @@
 #
 # Çalıştırma:  julia --project=. examples/ablation_prior_2d.jl
 # compare_prior_2d.jl'den daha uzun sürer (2 yerine 4 VFSA koşusu var).
+#
+# İsteğe bağlı (varsayılan kapalı, geriye uyumlu):
+#   SMARTPRIOR_GRAVITY_SENSITIVITY=true  — derinlik-duyarlı gravity_sensitivity
+#   kanalını FeatureStack'e ekler. Mevcut extrude gravite kanalları durur.
 
 using SmartPriorMT
 using MTGeophysics
@@ -30,9 +34,12 @@ const MT_SEED = parse(Int, get(ENV, "SMARTPRIOR_MT_SEED", "20260827"))
 const TRAIN_SEED = parse(Int, get(ENV, "SMARTPRIOR_TRAIN_SEED", "2026"))
 const VFSA_SEED = parse(Int, get(ENV, "SMARTPRIOR_VFSA_SEED", "4242"))
 const GRAV_SEED = parse(Int, get(ENV, "SMARTPRIOR_GRAV_SEED", "11"))
+const GRAVITY_SENSITIVITY = lowercase(strip(get(ENV, "SMARTPRIOR_GRAVITY_SENSITIVITY", "false"))) in
+    ("1", "true", "yes", "on")
 mkpath(WORK)
 @info "working directory" WORK
 @info "seeds" MT_SEED TRAIN_SEED VFSA_SEED GRAV_SEED
+@info "gravity_sensitivity" GRAVITY_SENSITIVITY
 
 #---------- 1. mesh ve truth (compare_prior_2d.jl ile birebir aynı) ----------
 
@@ -129,7 +136,8 @@ start_C = reshape(start_C, size(grid))
 
 #---------- 7. Kol D -- tam akıllı prior (compare_prior_2d.jl ile aynı) ----------
 
-stack = build_features(grid; gravity = gravity, sites = sites, baseline = baseline)
+stack = build_features(grid; gravity = gravity, sites = sites, baseline = baseline,
+                       gravity_sensitivity = GRAVITY_SENSITIVITY)
 X = encode_features(stack; n_bands = 4)
 
 site_cells = [(1, clamp(searchsortedlast(grid.y, y), 1, size(grid, 2)))
@@ -238,6 +246,11 @@ else
 end
 
 open(joinpath(WORK, "ablation_metrics.txt"), "w") do io
+    println(io, "gravity_sensitivity\t", GRAVITY_SENSITIVITY)
+    println(io, "seeds\tMT=", MT_SEED, "\tTRAIN=", TRAIN_SEED,
+            "\tVFSA=", VFSA_SEED, "\tGRAV=", GRAV_SEED)
+    println(io, "D_rmse_start\t", rmse(truth.log_rho, start_D))
+    println(io, "D_corr_start\t", anomaly_correlation(truth.log_rho, start_D))
     for key in (:A, :B, :C, :D)
         r = results_vfsa[key]
         println(io, key, "\t", arms[key].label, "\trmse_start=", r.cmp.rmse_start,

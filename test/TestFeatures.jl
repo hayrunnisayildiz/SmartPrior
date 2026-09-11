@@ -212,8 +212,29 @@ end
     @test length(gc) == length(gn)
     @test gn[1:3] == ["gravity", "gravity_dx", "gravity_dy"]
     @test "gravity_long" in gn
+    @test !("gravity_sensitivity" in gn)
     @test all(c -> size(c) == (nx, ny, nz), gc)
     @test all(c -> all(isfinite, c), gc)
+
+    # default-off: optional depth-aware channel does not change the historical count
+    gc_off, gn_off = gravity_channels(g, obs; sensitivity = false)
+    @test gn_off == gn
+    @test length(gc_off) == length(gc)
+
+    gc_on, gn_on = gravity_channels(g, obs; sensitivity = true)
+    @test length(gc_on) == length(gc_off) + 1
+    @test gn_on[1:(end - 1)] == gn_off
+    @test gn_on[end] == "gravity_sensitivity"
+    @test all(gc_on[i] == gc_off[i] for i in eachindex(gc_off))
+    sens_ch = gc_on[end]
+    @test all(isfinite, sens_ch)
+    # not an extruded copy: must vary with depth along a column
+    @test std(sens_ch[3, 3, :]) > 0
+    @test std(gc_off[1][3, 3, :]) == 0  # extruded gravity is z-constant
+    @test gravity_sensitivity_channel(g, obs) == sens_ch
+    @test std(gravity_cell_sensitivity(g, obs)[3, 3, :]) > 0
+    @test all(isfinite, gravity_cell_sensitivity(g, obs))
+    @test all(>=(0), gravity_cell_sensitivity(g, obs))
 
     surface = fill(0.0, nx, ny)
     surface[1, :] .= 120.0
@@ -252,11 +273,31 @@ end
 
     full = build_features(g; gravity = obs, surface_z = surface, sites = sites)
     @test "gravity" in full.names
+    @test !("gravity_sensitivity" in full.names)
     @test "surface_z" in full.names
     @test "site_distance" in full.names
     @test "baseline" in full.names
     @test nchannels(full) == length(full.names)
     @test all(isfinite, full.data)
+
+    # gravity_sensitivity defaults OFF: same channel count as the historical stack
+    full_off = build_features(g; gravity = obs, surface_z = surface, sites = sites,
+                              gravity_sensitivity = false)
+    @test nchannels(full_off) == nchannels(full)
+    @test full_off.names == full.names
+
+    full_on = build_features(g; gravity = obs, surface_z = surface, sites = sites,
+                             gravity_sensitivity = true)
+    @test nchannels(full_on) == nchannels(full) + 1
+    @test "gravity_sensitivity" in full_on.names
+    @test all(isfinite, full_on.data)
+    col = full_on["gravity_sensitivity"][3, 3, :]
+    @test all(isfinite, col)
+    @test std(col) > 0
+    # without gravity observations the flag is a no-op
+    no_grav = build_features(g; coordinates = true, gravity_sensitivity = true)
+    @test nchannels(no_grav) == nchannels(minimal)
+    @test !("gravity_sensitivity" in no_grav.names)
 
     # dropping the coordinate channels is how a transferable model is trained
     no_coords = build_features(g; gravity = obs, sites = sites, coordinates = false)
@@ -271,6 +312,19 @@ end
 
     @test full["gravity"] isa AbstractArray{Float64,3}
     @test_throws KeyError full["not_a_channel"]
+
+    off = build_features(g; gravity = obs, coordinates = false)
+    on = build_features(g; gravity = obs, coordinates = false,
+                        gravity_sensitivity = true)
+    @test nchannels(on) == nchannels(off) + 1
+    @test !("gravity_sensitivity" in off.names)
+    @test "gravity_sensitivity" in on.names
+    @test off.names == filter(!=("gravity_sensitivity"), on.names)
+    for name in off.names
+        @test off[name] == on[name]
+    end
+    @test std(on["gravity_sensitivity"][1, 2, :]) > 0
+    @test std(on["gravity"][1, 2, :]) == 0
 end
 
 @testset "feature_matrix layout matches vec of the grid" begin

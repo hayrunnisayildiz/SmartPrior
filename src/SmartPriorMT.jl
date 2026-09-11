@@ -49,7 +49,7 @@ export PriorGrid
 export ncells, cell_volumes, cell_centers, normalized_centers, depth_below_top
 
 # gravity
-export prism_gz, gravity_matrix, forward_gravity
+export prism_gz, gravity_matrix, gravity_cell_sensitivity, forward_gravity
 
 # 1-D MT physics (AD-safe)
 export mt1d_impedance, mt1d_apparent, mt1d_column_response
@@ -61,6 +61,7 @@ export nsites, nchannels, build_features, feature_matrix, nb_baseline
 export nb_baseline_lateral_std, residual_span_half_band, residual_span_from_baseline
 export standardize, extrude, idw_to_grid, gaussian_smooth_xy, gradient_xy
 export gravity_channels, topography_channels, depth_channels, coverage_channels
+export gravity_sensitivity_channel
 
 # neural field
 export PriorNet, setup_prior, predict, predict_grid

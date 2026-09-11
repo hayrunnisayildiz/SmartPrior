@@ -504,8 +504,50 @@ end
 const DEFAULT_GRAVITY_SCALES = (2.0, 5.0, 12.0)
 
 """
-    gravity_channels(g::PriorGrid, obs::GravityObs; scales=DEFAULT_GRAVITY_SCALES)
-        -> (Vector{Array{Float64,3}}, Vector{String})
+    gravity_cell_sensitivity(g::PriorGrid, obs::GravityObs; units=:mgal)
+        -> Array{Float64,3}
+
+[`gravity_cell_sensitivity`](@ref) from a [`GravityObs`](@ref) station set.
+"""
+gravity_cell_sensitivity(g::PriorGrid, obs::GravityObs; kwargs...) =
+    gravity_cell_sensitivity(g, obs.x, obs.y, obs.z; kwargs...)
+
+"""
+    gravity_sensitivity_channel(g::PriorGrid, obs::GravityObs) -> Array{Float64,3}
+
+Depth-aware gravity feature: prism-kernel sensitivity *per unit volume*,
+modulated by the interpolated surface anomaly, then standardised in-survey.
+
+Unlike the extruded maps in [`gravity_channels`](@ref), this field varies with
+depth. [`gravity_cell_sensitivity`](@ref) is the column L2 of
+[`gravity_matrix`](@ref) — how much that *cell* moves the stations, which grows
+with cell volume. Dividing by [`cell_volumes`](@ref) recovers an
+upward-continuation-style decay: a given density contrast at depth z contributes
+less than the same contrast near the surface, even when deep cells are thicker.
+A kernel-only map (no anomaly) would be almost a 1-D depth function on a
+well-covered profile (redundant with `log_depth`); the product is what gives
+the network a z-dependent gravity *location*.
+
+The kernel is the same operator as [`gravity_matrix`](@ref) / [`synth_gravity`](@ref).
+OPERATOR inverse crime exists if this channel is later trained against a loss
+that uses that operator; the channel does not remove it. Slab density still
+does not pass through [`density_from_mu`](@ref) — no petrophysical inverse crime.
+"""
+function gravity_sensitivity_channel(g::PriorGrid, obs::GravityObs)
+    nx, ny, nz = size(g)
+    sens = gravity_cell_sensitivity(g, obs)
+    vol = cell_volumes(g)
+    anomaly = idw_to_grid(g, obs.x, obs.y, obs.value)
+    raw = Array{Float64,3}(undef, nx, ny, nz)
+    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
+        raw[i, j, k] = (sens[i, j, k] / vol[i, j, k]) * anomaly[i, j]
+    end
+    return standardize(raw)
+end
+
+"""
+    gravity_channels(g::PriorGrid, obs::GravityObs; scales=DEFAULT_GRAVITY_SCALES,
+                     sensitivity=false) -> (Vector{Array{Float64,3}}, Vector{String})
 
 Feature channels derived from a gravity survey: the standardised anomaly, its two
 horizontal gradients, and one band-pass channel per entry in `scales`.
@@ -514,10 +556,17 @@ horizontal gradients, and one band-pass channel per entry in `scales`.
 cell size. Each band-pass channel is the difference between successively smoothed
 versions, so short and long wavelengths land in separate channels; a deep source
 shows up only in the long ones, which is the closest a single gravity map gets to
-depth information.
+depth information. Every one of those maps is extruded through depth — they do
+not vary with `z`.
+
+When `sensitivity=true`, appends one extra channel `"gravity_sensitivity"`:
+per-volume prism-kernel sensitivity times the interpolated surface anomaly
+(see [`gravity_sensitivity_channel`](@ref)). Default `false` keeps the historical
+channel count.
 """
 function gravity_channels(g::PriorGrid, obs::GravityObs;
-                          scales = DEFAULT_GRAVITY_SCALES)
+                          scales = DEFAULT_GRAVITY_SCALES,
+                          sensitivity::Bool = false)
     nx, ny, nz = size(g)
     h = g.h_median
 
@@ -542,6 +591,11 @@ function gravity_channels(g::PriorGrid, obs::GravityObs;
     end
     push!(chans, extrude(standardize(prev), nz))
     push!(names, "gravity_long")
+
+    if sensitivity
+        push!(chans, gravity_sensitivity_channel(g, obs))
+        push!(names, "gravity_sensitivity")
+    end
 
     return chans, names
 end
@@ -644,7 +698,8 @@ end
 """
     build_features(g::PriorGrid; gravity=nothing, surface_z=nothing, sites=nothing,
                    baseline=nothing, coordinates=true, rho_ref=100.0,
-                   gravity_scales=DEFAULT_GRAVITY_SCALES) -> FeatureStack
+                   gravity_scales=DEFAULT_GRAVITY_SCALES,
+                   gravity_sensitivity=false) -> FeatureStack
 
 Assemble the available data into a feature tensor.
 
@@ -657,6 +712,10 @@ intended to transfer between surveys.
 `baseline` is a `[nx, ny, nz]` log10 resistivity background, normally the output
 of [`nb_baseline`](@ref); when `sites` is given and `baseline` is not, it is
 computed automatically.
+
+`gravity_sensitivity` defaults to `false`, which keeps the historical gravity
+channel count (extruded surface maps only). Set `true` to append the depth-aware
+`"gravity_sensitivity"` channel; ignored when `gravity` is not supplied.
 """
 function build_features(g::PriorGrid;
                         gravity::Union{Nothing,GravityObs} = nothing,
@@ -665,7 +724,8 @@ function build_features(g::PriorGrid;
                         baseline::Union{Nothing,AbstractArray{<:Real,3}} = nothing,
                         coordinates::Bool = true,
                         rho_ref::Real = 100.0,
-                        gravity_scales = DEFAULT_GRAVITY_SCALES)
+                        gravity_scales = DEFAULT_GRAVITY_SCALES,
+                        gravity_sensitivity::Bool = false)
     nx, ny, nz = size(g)
     chans = Array{Float64,3}[]
     names = String[]
@@ -685,7 +745,8 @@ function build_features(g::PriorGrid;
     append!(chans, c); append!(names, n)
 
     if gravity !== nothing
-        c, n = gravity_channels(g, gravity; scales = gravity_scales)
+        c, n = gravity_channels(g, gravity; scales = gravity_scales,
+                                sensitivity = gravity_sensitivity)
         append!(chans, c); append!(names, n)
     end
 

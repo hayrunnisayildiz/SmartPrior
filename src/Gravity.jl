@@ -103,6 +103,67 @@ function gravity_matrix(g::PriorGrid,
 end
 
 """
+    gravity_cell_sensitivity(g::PriorGrid, sx, sy, sz; units=:mgal) -> Array{Float64,3}
+
+Per-cell L2 column-norm of the prism gravity operator: how strongly a unit
+density in that cell contributes to the station set.
+
+This is the same quantity as `norm(A[:, c])` for `A = gravity_matrix(...)`,
+reshaped to `[nx, ny, nz]`. It is geometric — it does not invert the observed
+anomaly. OPERATOR inverse crime is unchanged if the same `A` is later used in
+a gravity loss; this function only exposes the kernel as a map. There is no
+petrophysical inverse crime: density is not inferred.
+
+Deeper cells of comparable volume are less sensitive than shallow ones because
+the Plouff kernel decays with distance. Cell thickening on a graded mesh can
+offset that; the returned map is the operator as-is, not a per-volume Green's
+function.
+
+Cost is `O(nstations * ncells)`, same as [`gravity_matrix`](@ref), but only the
+`[nx, ny, nz]` map is stored.
+"""
+function gravity_cell_sensitivity(g::PriorGrid,
+                                  sx::AbstractVector{<:Real},
+                                  sy::AbstractVector{<:Real},
+                                  sz::AbstractVector{<:Real};
+                                  units::Symbol = :mgal)
+    ns = length(sx)
+    (length(sy) == ns && length(sz) == ns) ||
+        throw(ArgumentError("gravity_cell_sensitivity: station coordinate vectors must have equal length"))
+    ns > 0 || throw(ArgumentError("gravity_cell_sensitivity: need at least one station"))
+    units in (:mgal, :si) ||
+        throw(ArgumentError("gravity_cell_sensitivity: units must be :mgal or :si, got $units"))
+
+    scale = units === :mgal ? M_S2_TO_MGAL : 1.0
+    nx, ny, nz = size(g)
+    out = zeros(Float64, nx, ny, nz)
+
+    @inbounds for s in 1:ns
+        ox = float(sx[s])
+        oy = float(sy[s])
+        oz = float(sz[s])
+        for k in 1:nz
+            z1 = g.z[k]     - oz
+            z2 = g.z[k+1]   - oz
+            for j in 1:ny
+                y1 = g.y[j]   - oy
+                y2 = g.y[j+1] - oy
+                for i in 1:nx
+                    x1 = g.x[i]   - ox
+                    x2 = g.x[i+1] - ox
+                    a = scale * prism_gz(x1, x2, y1, y2, z1, z2)
+                    out[i, j, k] += a * a
+                end
+            end
+        end
+    end
+    @inbounds for i in eachindex(out)
+        out[i] = sqrt(out[i])
+    end
+    return out
+end
+
+"""
     forward_gravity(A, density) -> Vector
 
 Predicted gravity at the stations `A` was built for.
