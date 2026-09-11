@@ -138,11 +138,6 @@ prior **daha kötü** (best RMS 2.497 vs 2.299).
 - `BoundedVFSA.jl` yazıldı, 2B/3B yolda kullanılmadı, kanıtsız.
 - Slab eğimi iddiası **geri çekildi** (işaret seed’e göre değişiyor).
 
-## MTGeophysics.jl
-
-Bağımlılık; bu paket çözücüyü çatallamaz. `solve_mt1d_analytical` içindeki
-`Float64` cast’i ForwardDiff’i kırıyor — `MT1DAD.jl` bu yüzden var. Upstream PR
-aday; henüz gönderilmedi (önce Pankaj K. Mishra).
 
 ## Lisans
 
