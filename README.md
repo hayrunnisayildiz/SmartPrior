@@ -3,7 +3,7 @@
 2B manyetotellürik (MT) ters çözümü için **warm-start prior**. Homojen yarı-uzay
 yerine, gravite + gözlenen MT’nin Niblett–Bostick (NB) dönüşümü (+ isteğe bağlı
 topoğrafya) ile hücre-bazlı bir nominal log₁₀ ρ (`μ`) ve `σ` üretir; `μ`’yü
-MTGeophysics VFSA’sına başlangıç modeli olarak verir.
+VFSA2DMT’ye (2B) başlangıç modeli olarak verir.
 
 **Bu bir joint inversion değildir.** Gravite VFSA χ²’sine girmez; füzyon yalnızca
 prior aşamasındadır (prior-aşaması füzyonu). Çözücünün ileri fiziği, pertürbasyonu
@@ -107,7 +107,7 @@ geometrik soğuma). Kanonik küresel VFSA (Ingber / Sen & Stoffa) iddiası yoktu
 
 Hücre-bazlı `|bu hücredeki birim yoğunluk kontrastının yüzey gravitesine katkısı|`:
 `prism_gz` / `gravity_matrix` sütun L2 normu, hücre hacmine bölünür, yüzey
-anomalisi ile çarpılır. Yerel 3B (extrude değil); derinlikle sönümlenir. Mevcut
+anomalisi ile çarpılır. Yerel (hücre-bazlı) katkı, extrude değil; derinlikle sönümlenir. Mevcut
 extrude kanallar durur.
 
 İlk ablasyon (kol D, aynı seed’ler: MT=20260827, TRAIN=2026, VFSA=4242, GRAV=11)
@@ -180,6 +180,104 @@ altına iner, plato **0.911**; yarı-uzay final **1.040**. Plato arama tıkanık
 değil: `model_err_frac=0.4`, N=414, χ²/datum=1 tam RMS=1. Kaba ağda (20 km)
 prior **daha kötü** (best RMS 2.497 vs 2.299).
 
+## Ampirik doğrulama (2B)
+
+Aşağıdaki sonuçlar `examples/compare_prior_2d.jl` (3 seed),
+`examples/scenario_sweep_prior_2d.jl` (4 senaryo), ve
+`examples/robustness_misspecified_gravity.jl` (1 seed) çalıştırılarak elde
+edildi. Tüm karşılaştırmalar yarı-uzay başlangıçlı inversiyon ile prior
+başlangıçlı inversiyon arasındadır.
+
+**Veriye uyum (data RMS, en iyi zincir) — 3/3 seed'de tutarlı iyileşme:**
+
+| Seed | Yarı-uzay | Prior | İyileşme |
+|---|---|---|---|
+| t1 | 4.5976 | 3.4671 | %24.6 |
+| t2 | 5.0176 | 3.6401 | %27.5 |
+| t3 | 5.1453 | 3.8162 | %25.8 |
+
+**Örnek: t1, yakınsama karşılaştırması**
+
+| Yarı-uzay | Prior |
+|---|---|
+| ![t1 half convergence](docs/assets/t1_convergence_half.png) | ![t1 prior convergence](docs/assets/t1_convergence_prior.png) |
+
+Prior'un başlangıç χ²'si yarı-uzaydan ~1 büyüklük mertebesi düşük
+başlıyor (bkz. tablo); iki panel bunu görsel olarak doğruluyor.
+
+**Örnek: t1, en iyi zincir veri uyumu**
+
+| Yarı-uzay | Prior |
+|---|---|
+| ![t1 half data fit](docs/assets/t1_data_fit_half.png) | ![t1 prior data fit](docs/assets/t1_data_fit_prior.png) |
+
+**Korelasyon (gerçek modelle, inversiyon sonrası) — 3/3 seed'de tutarlı
+iyileşme:**
+
+| Seed | Yarı-uzay | Prior |
+|---|---|---|
+| t1 | 0.205 | 0.304 |
+| t2 | 0.341 | 0.402 |
+| t3 | 0.331 | 0.402 |
+
+**Model RMSE (gerçek modelle, inversiyon sonrası) — tutarsız, küçük
+farklar:**
+
+| Seed | Yarı-uzay | Prior | Fark |
+|---|---|---|---|
+| t1 | 0.6537 | 0.6202 | prior %5.1 daha yakın |
+| t2 | 0.5687 | 0.5538 | prior %2.6 daha yakın |
+| t3 | 0.5583 | 0.5656 | prior %1.3 daha uzak |
+
+**Örnek: t1, ortalama model karşılaştırması**
+
+| Yarı-uzay | Prior |
+|---|---|
+| ![t1 half model mean](docs/assets/t1_model_mean_half.png) | ![t1 prior model mean](docs/assets/t1_model_mean_prior.png) |
+
+Not: inversiyon öncesi (başlangıç modeli) RMSE'sinde yarı-uzay (0.4558)
+prior'dan (0.54-0.55) daha düşüktür -- düz bir tahmin, yapıyı bilmeden de
+RMSE'de "güvenli" görünebilir. Korelasyon bu yanılsamayı taşımaz ve
+projenin gerçek katkısını daha doğru yansıtır.
+
+**Senaryo taraması (VFSA yok, prior vs "naive baseline" RMSE/korelasyon,
+4 jeolojik senaryo):**
+
+| Senaryo | NB RMSE | Prior RMSE | NB corr | Prior corr |
+|---|---|---|---|---|
+| dip15_conductive | 0.716 | 0.423 | 0.489 | 0.741 |
+| dip35_conductive_published | 0.556 | 0.544 | 0.426 | 0.438 |
+| dip55_conductive | 0.477 | 0.557 | 0.391 | 0.317 |
+| dip35_resistive | 0.264 | 0.338 | 0.255 | 0.274 |
+
+4 senaryodan 2'sinde (sığ/orta eğimli iletken yapılar) prior belirgin
+şekilde daha iyi; 2'sinde (dik eğimli, veya dirençli-kontrastlı yapılar)
+daha kötü. Prior, her jeolojik senaryoda güvenilir değildir.
+
+**Yanlış-belirtilmiş gravite gürbüzlüğü (tek seed):** prior, hatalı
+gravite verisiyle bile yarı-uzaydan daha iyi kaldı (data RMS 3.0745 vs
+4.5976, korelasyon 0.322 vs 0.205, model RMSE %7.5 daha yakın). Tek
+seed'e dayanır, istatistiksel olarak ince bir kanıttır.
+
+**Sigma / belirsizlik tahmini:** `examples/ablation_sigma_vs_spread.jl`
+sonucuna göre öğrenilen `sigma`, gerçek hatayla (`|μ-truth|`) +0.337
+korelasyonludur -- rastgele değil, anlamlı bir sinyal taşır. Ancak (bkz.
+Sınırlamalar) hiçbir gerçek VFSA çalıştırmasına bağlı değildir.
+
+**Sigma / spread ablasyonu**
+
+![ablation sigma vs spread](docs/assets/ablation_sigma_vs_spread.png)
+
+corr(σ, spread) = 0.953: öğrenilen belirsizlik ile üye-topluluğu
+yayılımı güçlü korelasyonlu.
+
+**Özet:** Prior, veriye uyumu ve gerçek modelin mekânsal yapısıyla
+korelasyonu güvenilir ve tekrarlanabilir şekilde iyileştirir. Mutlak
+direnç genliği doğruluğunda (model RMSE) tutarlı bir kazanç yoktur
+(ortalama +%2.1, yön seed'e göre değişir). Her jeolojik senaryoda
+üstünlük göstermez -- dik dalımlı veya dirençli-kontrastlı yapılarda
+naive baseline'dan geride kalabilir.
+
 ## Sınırlamalar
 
 - Tek küresel gravite–özdirenç eğimi → tek baskın litoloji varsayımı.
@@ -201,8 +299,13 @@ prior **daha kötü** (best RMS 2.497 vs 2.299).
 - Mevcut gravite kanalları extrude (derinlik körü). `gravity_sensitivity` isteğe
   bağlı ve varsayılan kapalı; ilk D-kolu ablasyonu şeridi kaldırmadı.
 - `RealDataIO.jl` Musgrave’e özgü.
-- `BoundedVFSA.jl` 3B için hazırlandı, çalıştırılmadı; 2B/3B yolda kullanılmadı,
-  kanıtsız.
+- `BoundedVFSA.jl` EXPERIMENTAL: birim testli, ama canlı VFSA'ya bağlı
+  değil. Sebep SmartPriorMT değil — MTGeophysics `VFSA2DMTConfig` /
+  `VFSA3DMTConfig` (v0.5.0) yalnızca global `log_bounds::Tuple{Float64,
+  Float64}` kabul ediyor (`_propose_controls!` ve `clamp.` iki skaler
+  bekliyor; per-cell Array/Tuple/Vector denemesi MethodError verir).
+  Hücre-bazlı aralık upstream API gerektirir. `prior.lo` / `prior.hi`
+  yazılır, inversiyona girmez. 3B warm-start bu sürümde kapsam dışı.
 - Slab eğimi iddiası **geri çekildi** (işaret seed’e göre değişiyor).
 
 ## Lisans

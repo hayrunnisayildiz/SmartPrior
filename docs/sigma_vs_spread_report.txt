@@ -1,5 +1,5 @@
 σ vs ensemble spread — arm D, ablation synthetic (single run, seed TRAIN=2026)
-WORK = /Users/hayrunnisayildiz/SmartPriorModel/tmp_ablation
+WORK = tmp_ablation
 nmembers = 5
 
 DEFINITIONS

@@ -11,6 +11,44 @@ the space a stochastic solver such as VFSA has to explore.
 
 The mapping is learned by a Lux.jl neural field trained against differentiable
 physics: a closed-form prism gravity operator and an AD-safe 1D MT recursion.
+
+## Validation status (read before relying on a code path)
+
+- **2D warm start (`mu` only): validated.** `to_mt2d` converts the learned prior
+  to MTGeophysics' 2D mesh convention (linear ohm-m, axis order, air-layer
+  offset) and the result has been run end to end through
+  `MTGeophysics.run_mt2d_vfsa` / `VFSA2DMT` as the literal starting model; see
+  `examples/compare_prior_2d.jl` and `examples/musgrave_vfsa_compare.jl`.
+  Quantitative results (3 seeds, data RMS and correlation vs true model)
+  are in README.md's "Ampirik doğrulama (2B)" section. Improvement is
+  consistent for data fit and structural correlation; absolute resistivity
+  amplitude (model RMSE) shows no consistent gain, and a 4-scenario sweep
+  shows the prior underperforms a naive baseline in dip55/resistive-contrast
+  geologies.
+- **Per-cell search-interval narrowing (`sigma`, via `BoundedVFSA.jl`): not
+  connected to a real solver run, and not possible in this MTGeophysics
+  version.** `prior_bounds` and `BoundedVFSA.jl` compute and report what the
+  per-cell bounds *would* narrow the search to (`bound_report`), but
+  MTGeophysics v0.5.0's `VFSA2DMTConfig`/`VFSA3DMTConfig.log_bounds` only
+  accepts a scalar `Tuple{Float64,Float64}` -- confirmed by inspecting
+  `_propose_controls!`/`clamp.` and by `MethodError` on an array-valued
+  `log_bounds`. Every real run so far uses one scalar interval for the whole
+  grid. This is an MTGeophysics API gap, not a SmartPriorMT bug; see
+  `BoundedVFSA.jl`'s docstring.
+- **3D warm start (WS3D export via `write_prior`, `VFSA3DMT`): not implemented
+  or validated, and currently out of scope.** No test or example in this
+  package calls a 3D MTGeophysics inversion. `write_prior` writes `mu` (log10
+  resistivity) directly into a WS3D file with no unit conversion, unlike the
+  2D bridge; whether that matches MTGeophysics' actual WS3D convention has not
+  been confirmed against MTGeophysics' own source. Do not assume `prior.rho` is
+  a correct 3D starting model until this is checked and an end-to-end 3D run
+  exists.
+- **Known issue:** `examples/robustness_misspecified_gravity.jl` throws
+  `UndefVarError: BoundedCore` partway through (sections 8-9 do not run);
+  because output is piped through `tee`, the run still reports exit code
+  0. The inversion comparison itself (sections through data RMS/model
+  RMSE/correlation) completes successfully before the error. Not yet
+  fixed.
 """
 module SmartPriorMT
 
