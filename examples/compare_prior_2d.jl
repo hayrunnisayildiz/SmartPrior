@@ -236,6 +236,12 @@ sig_live = bundle.sigma[sig_mask]
 @printf("prior σ:  mean %.4f  std %.4f  corr(σ, |μ−truth|) %+.4f\n",
         mean(sig_live), std(sig_live),
         cor(sig_live, abs.(bundle.mu[sig_mask] .- truth.log_rho[sig_mask])))
+spr_live = bundle.spread[sig_mask]
+absres = abs.(bundle.mu[sig_mask] .- truth.log_rho[sig_mask])
+corr_spread_truth = cor(truth.log_rho[sig_mask], spr_live)
+corr_spread_abs = cor(spr_live, absres)
+@printf("prior spread (epistemic-only): mean %.4f  std %.4f  corr(spread, |μ−truth|) %+.4f\n",
+        mean(spr_live), std(spr_live), corr_spread_abs)
 hσ = results[1].history[end]
 if haskey(hσ, :sigma_target_mean)
     @printf("σ drive target (last log):  mean %.4f  std %.4f\n",

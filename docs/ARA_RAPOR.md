@@ -330,3 +330,74 @@ julia --project=. examples/ablation_prior_2d.jl
 SMARTPRIOR_PROTOCOL=blind SMARTPRIOR_WORK=tmp_blind_t1 \
   julia --project=. examples/train_prior_blind.jl
 ```
+
+---
+
+## 10. Genelleştirme planı (sıradaki adımlar)
+
+Bugüne kadarki tüm sonuçlar (§4–§6) **tek bir jeolojik senaryoya** dayanıyor: 35°
+eğimli, host'a göre daha iletken ve daha yoğun bir slab. 3 seed varyasyonu
+gürültü gerçekleşmesini (MT/eğitim/VFSA/gravite RNG) değiştiriyor, geometriyi
+değil. Aşağıdaki liste, "prior daha hızlı yakınsıyor" iddiasının kaç farklı
+koşulda ayakta durduğunu artırmak için öncelik sırasına göre.
+
+### 10.1 Zaten yazılmış, sadece çalıştırılıp rapora eklenmesi gereken
+
+Bu ikisi için yeni kod gerekmiyor — script'ler mevcut, sonuç yok:
+
+| Script | Ne test ediyor | Neden eksik |
+|---|---|---|
+| `examples/train_prior_sensitivity.jl` | `residual_span` × `slope_bounds` genişliği — beklenen şekil geniş bir plato, span=2.5'te keskin tepe değil | Çalıştırılmadı; §4.1'de "koşu sonuçları eklenecek" yazıyor |
+| `examples/robustness_misspecified_gravity.jl` | Yoğunluk alanına, MT/özdirenç tarafının hiç görmediği küçük ölçekli heterojenlik eklenince bozulma | Çalıştırılmış olabilir, sonucu hiçbir yerde raporlanmamış |
+
+```bash
+julia --project=. examples/train_prior_sensitivity.jl
+SMARTPRIOR_WORK=tmp_misspec_grav \
+  julia --project=. examples/robustness_misspecified_gravity.jl
+```
+
+### 10.2 Yeni: jeoloji sweep'i (`examples/scenario_sweep_prior_2d.jl`)
+
+Bu script bugün eklendi — mevcut kod tabanında geometriyi değiştiren bir
+altyapı yoktu. VFSA çalıştırmıyor (maliyeti düşük tutmak için sadece prior'u
+eğitip truth'a karşı skorluyor, `train_prior_sensitivity.jl` ile aynı desen);
+4 senaryo:
+
+| Senaryo | Değişen | Test ettiği |
+|---|---|---|
+| `dip15_conductive` | eğim 35°→15° | Sığ eğimde kazanç duruyor mu |
+| `dip35_conductive_published` | — (yayımlanan truth ile birebir) | İç tutarlılık kontrolü: `prior_corr` ARA_RAPOR §4 t1 (0.438) civarına düşmeli |
+| `dip55_conductive` | eğim 35°→55° | Dik eğimde kazanç duruyor mu |
+| `dip35_resistive` | kontrast işareti ters (yoğun+dirençli, `slope_bounds` de aynalanmış) | Öğrenilen eğim işaretinin dışsal varsayımı doğru yönde tutuluyor mu |
+
+```bash
+# tam koşu (~20-40 dk, 4 senaryo × 5 üyeli ensemble × 3000 epoch)
+julia --project=. examples/scenario_sweep_prior_2d.jl
+
+# hızlı keşif (birkaç dakika, güvenilir sayı değil ama şekli gösterir)
+SMARTPRIOR_EPOCHS=400 SMARTPRIOR_NMEMBERS=1 \
+  julia --project=. examples/scenario_sweep_prior_2d.jl
+```
+
+Çıktı `sweep_metrics.tsv`'de `prior_gain_corr` sütunu (prior korelasyonu − NB
+korelasyonu) her senaryo için pozitif kalıyorsa, "kazanç geometriye bağlı
+değil" iddiası bir senaryodan dörde çıkar. Negatife dönen bir satır varsa —
+özellikle `dip35_resistive`, çünkü orada işaret varsayımı ters çevriliyor —
+bunu gizlemeyin, §8 Sınırlamalar'a doğrudan ekleyin.
+
+### 10.3 Bu sweep sonrasında (VFSA'ya taşımaya değer mi)
+
+`scenario_sweep_prior_2d.jl` sadece prior kalitesini (RMSE/korelasyon) ölçüyor,
+VFSA yakınsama hızını değil. En ilginç çıkan 1-2 senaryoyu (en büyük kazanç ve
+en küçük/negatif kazanç) `compare_prior_2d.jl`'e aynı seed'lerle taşıyıp, §4'teki
+gibi iter 1 / iter 400 data RMS tablosu çıkarmak, "yakınsama hızı" iddiasını da
+tek senaryonun ötesine taşır.
+
+### 10.4 Kapsam dışı (bu hafta değil)
+
+- Çoklu cisim / karışık litoloji (Musgrave'in dirençli Giles + iletken zon
+  yapısına benzer sentetik) — §Sınırlamalar madde 1'in doğrudan testi, ama
+  yeni bir truth builder'ı ve muhtemelen `add_block` + `add_dipping_slab`
+  kombinasyonu gerektiriyor.
+- Mesh çözünürlüğü sweep'i — kaba ağda (20 km) zaten negatif sonuç var (§6.2);
+  ince/orta çözünürlük arası bir tarama henüz yok.

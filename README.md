@@ -73,6 +73,13 @@ SMARTPRIOR_PROTOCOL=blind SMARTPRIOR_WORK=tmp_blind_t1 \
   julia --project=. examples/train_prior_blind.jl
 ```
 
+Jeoloji sweep'i (eğim açısı + kontrast işareti, VFSA yok — bkz.
+[`docs/ARA_RAPOR.md` §10](docs/ARA_RAPOR.md#10-genelleştirme-planı-sıradaki-adımlar)):
+
+```bash
+julia --project=. examples/scenario_sweep_prior_2d.jl
+```
+
 ## Mimari
 
 ```
@@ -179,7 +186,9 @@ prior **daha kötü** (best RMS 2.497 vs 2.299).
   **İyi:** jeotermal kil örtüsü, sedimanter havza, sülfid.
   **Kötü:** karışık litoloji (grafitli şeyl / mafik intrüzyon / tuz bir arada).
   Her sahada çalışır iddiası yoktur. Musgrave (dirençli Giles + iletken zon)
-  karışık litoloji örneğidir.
+  karışık litoloji örneğidir. Şu ana kadarki sentetik sonuçların tümü (§Doğrulama)
+  tek bir eğim açısı ve tek bir kontrast işareti üzerinde; bunu genişletme planı
+  [`docs/ARA_RAPOR.md` §10](docs/ARA_RAPOR.md#10-genelleştirme-planı-sıradaki-adımlar).
 - TE-only. TM mevcut ama istasyon-bazlı model hatası tek `model_err_frac` ile
   kalibre edilemiyor (v0.2).
 - `σ` inversiyona girmez ve kalibre belirsizlik haritası değildir (yukarıdaki
