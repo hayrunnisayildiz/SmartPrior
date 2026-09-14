@@ -52,6 +52,13 @@ değişen başlangıç noktası.
 Bu fark büyük ölçüde başlangıç noktasından geliyor: prior, ilk iterasyondan
 itibaren yarı-uzaydan çok daha az hata veriyor (~4.6 vs ~30).
 
+**Örnek (t1): yakınsama ve veri uyumu, yarı-uzay vs prior**
+
+| Yarı-uzay | Prior |
+|---|---|
+| ![t1 half convergence](docs/assets/t1_convergence_half.png) | ![t1 prior convergence](docs/assets/t1_convergence_prior.png) |
+| ![t1 half data fit](docs/assets/t1_data_fit_half.png) | ![t1 prior data fit](docs/assets/t1_data_fit_prior.png) |
+
 ### 2) Gerçek modelle örtüşme: yapı evet, genlik belirsiz
 
 | Ölçüt | Sonuç |
@@ -61,6 +68,12 @@ itibaren yarı-uzaydan çok daha az hata veriyor (~4.6 vs ~30).
 
 Yorum: prior, yapıyı (nerede iletken/dirençli) daha doğru yakalıyor ama
 mutlak direnç değerlerinde garanti bir kazanç yok.
+
+**Örnek (t1): inversiyon sonrası ortalama model, gerçek modelle karşılaştırma**
+
+| Yarı-uzay | Prior |
+|---|---|
+| ![t1 half model mean](docs/assets/t1_model_mean_half.png) | ![t1 prior model mean](docs/assets/t1_model_mean_prior.png) |
 
 ### 3) Her jeolojide işe yaramıyor
 
