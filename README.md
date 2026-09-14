@@ -16,7 +16,7 @@ Tüm ayrıntılı tablolar, ablasyonlar ve figürler: [`docs/ARA_RAPOR.md`](docs
 | Prior, veriye daha hızlı uyuyor mu? | **Evet** — 3/3 seed'de, başlangıçtan itibaren tutarlı şekilde |
 | Prior, gerçek modelle daha çok örtüşüyor mu? | **Kısmen** — yapısal korelasyon iyileşiyor, mutlak genlik (RMSE) belirsiz |
 | Her jeolojik senaryoda çalışıyor mu? | **Hayır** — dik eğimli / dirençli-kontrastlı yapılarda geride kalabiliyor |
-| VFSA arama hedefine (RMS=1.0) ulaşıyor mu? | **Hayır, henüz değil** — mevcut bütçe yetersiz, bu açık bir konu |
+| VFSA arama hedefine (RMS=1.0) ulaşıyor mu? | **Hayır** — bütçe artışı (400→3000) kazancın yarısından azını getirdi; darboğaz artık `max_iter` değil, RBF parametrizasyonu |
 
 Bu proje bir "joint inversion" değildir. Gravite yalnızca prior üretiminde
 kullanılır; VFSA'nın kendi arama sürecine (χ²) girmez.
@@ -86,36 +86,52 @@ iyi, dik eğimli veya dirençli-kontrastlı yapılarda geride kalıyor.
 
 ---
 
-## Güncel Sorun: VFSA Arama Bütçesi Yetersiz
+## Sonuç: VFSA Bütçesi Değil, Parametrizasyon Darboğaz
 
 Yukarıdaki sonuçlar `max_iter=400` ile alındı. Hedef veri uyumu
-(`target_rms=1.0`) — mevcut sonuçlar bunun 3-5 katı üzerinde kalıyor.
+(`target_rms=1.0`) — mevcut sonuçlar bunun üzerinde kalıyor. Bunu çözmek için
+bütçeyi kademeli artırıp test ettik: 400 → 800 → 3000 iterasyon.
 
-**t1'de bütçeyi 400 → 800'e çıkarınca ne oldu:**
+**t1'de bütçe artışının etkisi (en iyi zincir, final RMS):**
 
-| kol | 400 iter (final) | 800 iter (final) |
+| bütçe | prior | yarı-uzay |
 |---|---:|---:|
-| prior (en iyi zincir) | 3.47 | **2.90** |
-| yarı-uzay (en iyi zincir) | 4.60 | **3.87** |
+| 400 | 3.47 | 4.60 |
+| 800 | 2.90 | 3.87 |
+| 3000 | **2.64** | **3.50** |
 
-İyileşme var, ama hedeften hâlâ uzak. Yarı-uzay hâlâ hızlı düşüyor; prior
-en iyi zinciri yavaşladı (soğuk arama aşamasında beklenebilecek bir durum,
-ama kesin plato mu belirsiz).
+**Sonuç netleşti:**
 
-**Maliyet iyi haber:** 800 iterasyon sadece ~8 dakika sürdü (tahmin edilenin
-çok altında — makine daha boştu).
+- **Eski 400-iter teşhisi doğru çıktı** — o "plato" değil, kısa bütçeydi.
+- **Ama 3000 de yetmiyor.** 800→3000 arası 5.5× daha fazla iterasyon
+  harcandı, kazancın yarısından azı geldi. Son 200 iterasyonda eğim
+  ~−0.0003/iter, kabul oranı %4–9 — soğuk uçta arama neredeyse durmuş.
+  Kalan fark (~1.6 RMS) artık iterasyonla kapanmıyor.
+- **Sebep muhtemelen RBF parametrizasyonu.** 250 kontrol noktası ve
+  ~800–1000 m çekirdek genişliği, %5 gürültülü 2B veriyi RMS=1'e kadar temsil
+  etmeye yetmiyor olabilir. `step_scale` darboğaz değildi.
+- **Prior'a "kilitlenme" değil.** Prior, veriye yarı-uzaydan tutarlı şekilde
+  daha iyi oturuyor (2.64 vs 3.50) — bu bir arama artefaktı değil, gerçek bir
+  başlangıç avantajı. Yarı-uzay bütçe arttıkça yaklaşıyor ama geçmiyor.
+- **Truth RMSE ayrı bir konu olarak kalıyor.** VFSA, gürültülü veriye uyuyor;
+  data RMS düşmesi otomatik olarak gerçek modele yaklaşmak anlamına gelmiyor
+  (bkz. "Gerçek modelle örtüşme" bulgusu).
 
-**Sıradaki adım:** `max_iter=3000` ile aynı test. Eğri hâlâ düşerse bütçe
-artışı işe yarıyor demektir; düzlenirse sorun bütçe değil, arama parametreleri
-(`n_ctrl`, `rbf_sigma_scale`) olur.
+**Pratik sonuç:** yukarıdaki 400-iter tablo start-bağımlı, tam yakınsamamış
+bir aramadan geliyor — ama bu, prior'ın veri uyumunu hızlandırdığı bulgusunu
+geçersiz kılmıyor. RMS=1 hedefleniyorsa sıradaki kaldıraç `max_iter` değil;
+`n_ctrl` artırımı, daha dar RBF çekirdeği veya farklı bir parametrizasyon.
 
 ---
 
 ## Sonraki Adımlar
 
-1. `max_iter=3000` sondası (t1, tek seed) — çalışıyor / planlanıyor
-2. Sonuca göre: bütçeyi kalıcı artır **veya** arama parametrelerini ayarla
-3. Karar netleşince tüm 3-seed doğrulamasını yeni bütçeyle tekrar çalıştır
+1. RBF parametrizasyonunu ayarla: `n_ctrl` artırımı ve/veya daha dar çekirdek
+   (`rbf_sigma_scale` küçültme) — t1'de tek seed sonda
+2. Sonda RMS=1 hedefine yaklaşırsa 3-seed doğrulamasını yeni parametrizasyonla
+   tekrar çalıştır
+3. `max_iter` artık kaldıraç değil — bütçe 400'de sabitlenebilir, kazanılan
+   zaman parametrizasyon aramasına aktarılabilir
 
 ---
 
