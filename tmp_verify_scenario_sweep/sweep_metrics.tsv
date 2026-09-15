@@ -1,0 +1,5 @@
+scenario	dip_deg	slab_log_rho	slope_lo	slope_hi	nb_rmse	nb_corr	prior_rmse	prior_corr	prior_gain_corr	ols_b
+dip15_conductive	15.0	0.60	-4.00	-0.20	0.716359	0.488775	0.422562	0.740552	+0.251776	0.885194
+dip35_conductive_published	35.0	0.60	-4.00	-0.20	0.555532	0.426190	0.544354	0.437599	+0.011409	0.416433
+dip55_conductive	55.0	0.60	-4.00	-0.20	0.476615	0.391032	0.557259	0.316919	-0.074113	0.270551
+dip35_resistive	35.0	3.80	0.20	4.00	0.263685	0.255016	0.338497	0.273678	+0.018662	0.263566

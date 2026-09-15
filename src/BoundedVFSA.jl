@@ -1,14 +1,23 @@
 """
     BoundedVFSA
 
-EXPERIMENTAL / UNVALIDATED — prepared for a future 3-D driver, never
-run in 3-D, not covered by the public API. Not exported.
+EXPERIMENTAL / UNVALIDATED — not covered by the public API. Not exported.
+
+Unit-tested in isolation (`test/TestBoundedVFSA.jl`), but never wired into a
+live `VFSA2DMT` / `VFSA3DMT` run. That is an MTGeophysics.jl API gap, not a
+SmartPriorMT defect: both `VFSA2DMTConfig.log_bounds` and
+`VFSA3DMTConfig.log_bounds` are typed `Tuple{Float64,Float64}` (one global
+interval). Passing a per-cell array raises `MethodError` on convert. Upstream
+would need to accept cell-indexed bounds and thread them through
+`_propose_controls!` / `propose_controls!` and the trial `clamp`. Until that
+lands, `prior.lo` / `prior.hi` are written for inspection only.
 """
 
 # Per-cell search bounds for the VFSA inversion.
 #
-# MTGeophysics' 3D VFSA carries one global interval, `cfg.log_bounds = (lo, hi)`,
-# and uses it in exactly two places inside the iteration:
+# MTGeophysics' 2D and 3D VFSA each carry one global interval,
+# `cfg.log_bounds = (lo, hi)`, and use it in exactly two places inside the
+# iteration (names differ slightly between drivers):
 #
 #   propose_controls!(delta, T, lo, hi, v0_at_ctrl, nsel, rng; step_scale)
 #   v_trial = clamp.(v0_core .+ delta_values, lo, hi)

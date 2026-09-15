@@ -1,0 +1,7 @@
+start	2026-09-15 00:42:13
+half_s	1000.899
+prior_s	1240.928
+total_s	2242.547
+end	2026-09-15 01:19:36
+half_best_rms	3.503294
+prior_best_rms	2.640507

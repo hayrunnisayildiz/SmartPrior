@@ -1,0 +1,17 @@
+epochs	300
+nmembers	1
+train_seed	2026
+nan_mu	false
+nan_sigma	false
+last_epoch	300
+last_total	323.4304032033798
+last_gravity	8.15219303640043
+last_mt	314.1602897229276
+last_smooth	0.022230663135486196
+last_sigma	0.0003500741856401812
+last_reference	0.06352279858902109
+last_slope	0.6275817618559294
+last_saturation	0.0
+mae_mu_baseline	0.1842267220427063
+corr_mu_baseline	0.9178707919095372
+damping_warning	false

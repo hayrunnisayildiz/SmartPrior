@@ -1,0 +1,13 @@
+scenario	dip15_conductive
+dip_deg	15.0
+slab_log_rho	0.6
+slope_bounds	(-4.0, -0.2)
+nb_rmse	0.7163591769833496
+nb_corr	0.48877521775560734
+prior_rmse	0.42256215794142993
+prior_corr	0.7405515886904219
+prior_gain_corr	0.2517763709348146
+ols_a	0.43457694201601305
+ols_b	0.8851938435102878
+epochs	3000
+nmembers	5

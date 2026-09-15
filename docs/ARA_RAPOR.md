@@ -3,10 +3,15 @@
 **Kime:** bilgisayar mühendisi (jeofizik varsayılmaz)
 **Ne:** 2B manyetotellürik (MT) ters çözümü için öğrenilmiş **warm-start prior**
 **Sürüm:** 0.1.0 · Julia 1.10 · Lux.jl + Zygote + MTGeophysics 0.5.0
-**Tarih:** 9 Eylül 2026
-**Kaynak:** `tmp_noisy_v2`, `tmp_seed2_v2`, `tmp_seed3_v2`, `tmp_blind_t{1,2,3}`,
-`tmp_bestcase_t1`, `tmp_ablation`, `tmp_musgrave`, `tmp_musgrave_coarse` — sayılar
-ilgili `metrics.txt` / `Summary.md` dosyalarından.
+**Tarih:** 15 Eylül 2026
+**Kaynak:** 3-seed VFSA `tmp_verify_compare_t{1,2,3}` (best chain, 14 Eylül);
+bütçe t1 `tmp_verify_compare_t1_iter{800,3000}`; jeoloji sweep
+`tmp_verify_scenario_sweep`; misspec gravite `tmp_verify_robust`;
+blind/best-case `tmp_blind_t{1,2,3}`, `tmp_bestcase_t1`; ablasyon
+`tmp_ablation`; Musgrave `tmp_musgrave`, `tmp_musgrave_coarse`.
+Sayılar ilgili `Summary.md` / `metrics.txt` / koşu loglarından.
+Eski `tmp_*_v2` VFSA satırları (yalnızca chain 1) bu tablolarla
+**karıştırılmamalı**.
 
 Bu bir **joint inversion değildir.** Füzyon yalnızca başlangıç modeli üretilirken olur; VFSA çözücüsüne dokunulmaz.
 
@@ -28,10 +33,12 @@ Ağın truth’u görmediği bir sentetikte, 3 bağımsız seed ile:
 
 | | yarı-uzay | smart prior | ayrım |
 |---|---:|---:|---|
-| **data RMS, iter 1** | 30.260 ± 0.019 | 4.558 ± 0.080 | ~150 örnek std |
-| **data RMS, iter 400** | 4.995 ± 0.347 | 3.744 ± 0.340 | aralıklar örtüşmüyor |
+| **data RMS, iter 1** | 30.259 ± 0.019 | 4.591 ± 0.054 | stokastik değil |
+| **data RMS, iter 400** | 4.920 ± 0.287 | 3.641 ± 0.175 | aralıklar örtüşmüyor |
 
 Iter 1 farkı stokastik değil: iki farklı başlangıç modelinin ileri çözümüdür.
+400. iterasyonda da prior 3/3 seed’de daha düşük data RMS’te biter (~%25).
+`target_rms = 1.0` bu bütçeyle (ve 3000 iterasyonda da) ulaşılmaz — §4.4.
 
 ---
 
@@ -62,7 +69,8 @@ Aynı mesh, aynı gürültülü gözlem, iki kolda yalnızca başlangıç deği�
 6. PriorNet       Lux MLP, residual-mode (NB’ye düzeltme öğrenir).
                   5 üyeli ensemble, 3000 epoch, Zygote AD.
 7. PriorBundle    (μ, σ) → start_prior.rho
-8. VFSA × 2       Aynı seed, 2 zincir, 250 kontrol, 400 iter (ablasyonda 1200).
+8. VFSA × 2       Aynı seed, 2 zincir, 250 kontrol, 400 iter (t1 bütçe
+                  taramasında 800 ve 3000; ablasyonda 1200).
                   Kol A: yarı-uzay. Kol D: prior.
 ```
 
@@ -104,34 +112,49 @@ Kayıp terimleri (hepsi AD-güvenli, etiketsiz):
 
 ## 3. Ne iddia ediyoruz, ne etmiyoruz
 
-**Ayakta:** prior, VFSA’yı ~7× daha düşük ilk misfit’ten başlatır; 400 iterasyonda da daha düşük data RMS’te biter (3 seed, örnek std ile).
+**Ayakta:** prior, VFSA’yı ~7× daha düşük ilk misfit’ten başlatır; 400
+iterasyonda da daha düşük data RMS’te biter (3/3 seed, best chain).
+
+**Ayakta, dar jeoloji:** sığ–orta eğimli, yoğun=iletken slab’de prior, NB
+baseline’ından daha yüksek korelasyon verir (15° ve yayımlanan 35°).
 
 **Çürütülen:** “prior daha dik slab üretir.” Eğim farkının işareti seed’e göre değişiyor. Bu iddiayı kurmayın.
 
+**Çürütülen:** “kazanç her geometride duruyor.” 55° dik eğimde prior NB’den
+kötü (corr kazancı −0.074). Ters polaritede (yoğun+dirençli) RMSE NB’nin
+üzerinde.
+
 **Kanıtlanamadı:** gerçek sahada (Musgrave) prior’ın nihai yeraltı modelinin yarı-uzaydan daha doğru olduğu — truth yok.
+
+**Darboğaz:** sentetikte `target_rms = 1.0` 3000 iterasyonda da kapanmıyor.
+Kalan fark `max_iter` değil, RBF parametrizasyonu (`n_ctrl = 250`).
 
 ---
 
 ## 4. Sentetik — 3 seed (ayakta duran tablo)
 
-Aynı deney, üç bağımsız `(MT, train, VFSA, gravite)` seed’i. Chain 1. Std örnek (`n−1`).
+Aynı deney, üç bağımsız `(MT, train, VFSA, gravite)` seed’i.
+Kaynak: `tmp_verify_compare_t{1,2,3}` (14 Eylül 2026). VFSA satırları **best
+chain** (`Summary.md` `best_chain_rms`). Std örnek (`n−1`).
+`SigmaDriveConfig` açık.
 
-| metrik | t1 `noisy_v2` | t2 `seed2_v2` | t3 `seed3_v2` | **ort ± std** |
+| metrik | t1 | t2 | t3 | **ort ± std** |
 |---|---:|---:|---:|---:|
-| NB RMSE (log₁₀ ρ) | 0.556 | 0.547 | 0.551 | **0.551 ± 0.004** |
-| prior RMSE | 0.546 | 0.554 | 0.539 | **0.546 ± 0.008** |
-| NB korelasyon | 0.426 | 0.430 | 0.429 | **0.429 ± 0.002** |
-| prior korelasyon | 0.438 | 0.439 | 0.453 | **0.443 ± 0.008** |
-| yarı-uzay RMS iter 1 | 30.278 | 30.240 | 30.261 | **30.260 ± 0.019** |
-| prior RMS iter 1 | 4.547 | 4.485 | 4.643 | **4.558 ± 0.080** |
-| yarı-uzay RMS iter 400 | 4.598 | 5.242 | 5.145 | **4.995 ± 0.347** |
-| prior RMS iter 400 | 3.462 | 4.122 | 3.649 | **3.744 ± 0.340** |
+| NB RMSE (log₁₀ ρ) | 0.556 | 0.547 | 0.551 | **0.551 ± 0.005** |
+| prior RMSE | 0.544 | 0.554 | 0.539 | **0.546 ± 0.008** |
+| NB korelasyon | 0.426 | 0.430 | 0.429 | **0.428 ± 0.002** |
+| prior korelasyon | 0.438 | 0.440 | 0.453 | **0.444 ± 0.008** |
+| yarı-uzay RMS iter 1 | 30.278 | 30.240 | 30.261 | **30.259 ± 0.019** |
+| prior RMS iter 1 | 4.553 | 4.566 | 4.653 | **4.591 ± 0.054** |
+| yarı-uzay RMS iter 400 | 4.598 | 5.018 | 5.145 | **4.920 ± 0.287** |
+| prior RMS iter 400 | 3.467 | 3.640 | 3.816 | **3.641 ± 0.175** |
 
 Okuma notu:
 
-- Prior ham RMSE, NB baseline’ı **kesin geçmiyor** (aralıklar örtüşüyor). Kazanç korelasyonda: 0.443 vs 0.429, aralıklar örtüşmüyor.
+- Prior ham RMSE, NB baseline’ı **kesin geçmiyor** (aralıklar örtüşüyor). Kazanç korelasyonda: 0.444 vs 0.428, aralıklar örtüşmüyor.
 - Data RMS, model RMSE değildir. VFSA veriye uyar; truth’a RMSE’nin iterasyon boyunca bozulması beklenen bir durum olabilir (gürültüye uydurma).
-- Tablodaki koşular **düzgün σ** (`sigma_target = 0.35`, `sigma_drive` kapalı) ile alındı. Kod artık `SigmaDriveConfig` kullanıyor; `mean(σ) ≈ 0.36` ve `corr(σ, |res|) = +0.09` o eski konfigürasyona aittir, yeniden ölçülmedi.
+- Eski `tmp_*_v2` tablosu yalnızca chain 1 idi (t2 yarı-uzay 5.242, prior 4.122). Best chain t2’yi 5.018 / 3.640 yapar; README ile aynı.
+- `σ`: t1’de `mean(σ) = 0.376`, `corr(σ, |μ−truth|) = +0.368`. Bu, eski düzgün-σ koşusundaki `corr(σ, |residual|) = +0.09` ile **aynı ölçüm değil**. `σ` hâlâ kalibre belirsizlik haritası değil ve VFSA’ya girmez.
 
 ### 4.1 Best-case vs blind hiperparametre (model uzayı)
 
@@ -153,9 +176,9 @@ kullanır (izin verici). Musgrave örnekleri de aynı half_band kuralını çağ
 
 #### Best-case — yöntemin üst sınırı (uygun hiperparametrelerle)
 
-Yayımlanan `tmp_*_v2` prior satırları (§4). Eşleşmiş yeniden-koşu
+Yayımlanan best-case prior satırları (eğitim-only). Eşleşmiş yeniden-koşu
 (`SMARTPRIOR_PROTOCOL=bestcase`, aynı kod + `SigmaDriveConfig`): t1 RMSE 0.544 /
-corr 0.438 — yayımlananla bit-düzeyinde uyumlu; σ-drive bu karşılaştırmayı
+corr 0.438 — §4 t1 ile pratik olarak aynı; σ-drive bu karşılaştırmayı
 bozmuyor.
 
 | metrik | t1 | t2 | t3 | **ort ± std** |
@@ -183,21 +206,112 @@ Duyarlılık taraması: `examples/train_prior_sensitivity.jl`
 (`residual_span ∈ {1.0…5.0}` × üç slope genişliği). Beklenen şekil: geniş plato,
 2.5’te keskin tepe değil — koşu sonuçları eklenecek.
 
-### 4.2 Görsel: aynı bütçe, iki başlangıç (seed 3)
+### 4.2 Görsel: aynı bütçe, iki başlangıç
 
-Yarı-uzaydan VFSA sonucu (ensemble mean):
+t1, best chain, **aynı eksen** (tablo değerleri annotasyonlu):
+
+![t1 half vs prior](assets/t1_half_vs_prior.png)
+
+Seed 3 ensemble mean (yapı karşılaştırması; eski yakınsama panelleri ayrı
+eksen ölçeği kullandığı için overlay’e taşındı):
 
 ![Yarı-uzay VFSA mean](figures/seed3_half_mean.png)
 
-Prior’dan VFSA sonucu (ensemble mean):
-
 ![Prior VFSA mean](figures/seed3_prior_mean.png)
 
-Yakınsama (data RMS vs iterasyon). Sol eksen log; prior zaten düşükten başlar:
+### 4.3 VFSA sonrası model uzayı (truth’a)
 
-![Yarı-uzay yakınsama](figures/seed3_half_convergence.png)
+Data RMS ≠ truth RMSE. Aynı 3 seed, VFSA sonrası `model.mean` vs truth.
+Kaynak: `tmp_verify_logs/compare_t{1,2,3}.log`.
 
-![Prior yakınsama](figures/seed3_prior_convergence.png)
+| seed | yarı-uzay RMSE | prior RMSE | yarı-uzay corr | prior corr |
+|---|---:|---:|---:|---:|
+| t1 | 0.654 | **0.620** | 0.205 | **0.304** |
+| t2 | 0.569 | **0.554** | 0.341 | **0.402** |
+| t3 | **0.558** | 0.566 | 0.331 | **0.402** |
+
+Korelasyon 3/3 seed’de prior’da daha yüksek. RMSE tutarsız — t3’te yarı-uzay
+truth’a daha yakın. Yapı (nerede iletken/dirençli) daha iyi yakalanıyor;
+mutlak genlikte garanti yok.
+
+### 4.4 Bütçe 400 → 800 → 3000 (t1, best chain)
+
+`target_rms = 1.0`. Üç **ayrı** koşu; soğuma `cool_ratio = 0.001` bütçeye
+göre ölçeklenir — 3000’lik koşunun 400. iterasyonu, 400’lük koşunun sonu
+değildir.
+
+| `max_iter` | prior | yarı-uzay | kaynak |
+|---:|---:|---:|---|
+| 400 | 3.467 | 4.598 | `tmp_verify_compare_t1` |
+| 800 | 2.904 | 3.869 | `tmp_verify_compare_t1_iter800` |
+| 3000 | **2.641** | **3.503** | `tmp_verify_compare_t1_iter3000` |
+
+![t1 budget overlay](assets/t1_budget_overlay.png)
+
+- 400 kısa bütçeydi, plato değildi: 800’e inince her iki kol da düşer.
+- 800 → 3000 (5.5× iterasyon) umulan kazancın yarısından azını verir.
+  Son 200 iterasyonda RMSBest eğimi yarı-uzay −0.00039/iter, prior
+  −0.00043/iter; kabul oranı %9.0 / %7.5 — soğuk rejimde arama neredeyse durmuş.
+- Kalan ~1.6 RMS `max_iter` ile kapanmıyor. Aday: RBF parametrizasyonu
+  (`n_ctrl = 250`, çekirdek ~800–1000 m). `step_scale` darboğaz değildi.
+- Prior, yarı-uzayı geçmeye devam eder (2.641 vs 3.503); bu başlangıç
+  avantajıdır, arama artefaktı değil. Yarı-uzay daha fazla bütçeyle yaklaşır,
+  geçmez.
+
+### 4.5 Jeoloji sweep (VFSA yok — prior vs NB)
+
+Kaynak: `tmp_verify_scenario_sweep/sweep_metrics.tsv` (3000 epoch, 5 üye).
+`dip35_conductive_published` satırı RMSE 0.544 / corr 0.438 ile §4 t1’e
+oturuyor — pipeline sapmamış.
+
+| senaryo | eğim | NB RMSE | NB corr | prior RMSE | prior corr | kazanç (corr) |
+|---|---:|---:|---:|---:|---:|---:|
+| dip15_conductive | 15° | 0.716 | 0.489 | 0.423 | 0.741 | **+0.252** |
+| dip35_conductive_published | 35° | 0.556 | 0.426 | 0.544 | 0.438 | +0.011 |
+| dip55_conductive | 55° | 0.477 | 0.391 | 0.557 | 0.317 | **−0.074** |
+| dip35_resistive | 35° | 0.264 | 0.255 | 0.338 | 0.274 | +0.019 |
+
+`dip35_resistive` kontrastı 1.2 dekat (diğerleri 2.0); RMSE’yi diğerleriyle
+doğrudan kıyaslamayın, kendi NB’sine göre okuyun.
+
+- **15°:** net kazanç. **35° yayımlanan:** küçük ama pozitif corr kazancı.
+- **55°:** prior NB’den kötü. Scout (400 epoch, 1 üye) −0.018 idi; tam eğitim
+  −0.074 — “az eğitildi” değil.
+- **Ters polarite:** corr kazancı +0.019; prior RMSE (0.338) NB’nin (0.264)
+  üzerinde. “Kazandırıyor” denemez.
+
+dip55 ayırt edici (tek senaryo, tam eğitim):
+
+| koşu | smooth | reference | kazanç (corr) |
+|---|---:|---:|---:|
+| taban | 10.0 | 0.0 | −0.074 |
+| yumuşaklık gevşetildi | 1.0 | 0.0 | −0.137 |
+| residual cezalandı | 10.0 | 0.3 | −0.071 |
+
+İki düzenlileştirme hipotezi de elendi. Kalan aday: dik eğimde yüzey izi
+daralır, sabit istasyon aralığı (500–1000 m) yeterince örneklemez. NB’nin
+kendi korelasyonu da eğimle düşer (0.489 → 0.426 → 0.391) — ağa özgü değil.
+
+**İddia sınırı:** 15°–35°, yoğun=iletken. Dışında kazanç yok veya negatif.
+Bu sweep VFSA yakınsama hızını ölçmez.
+
+### 4.6 Misspec gravite (tek seed, t1 seed seti)
+
+Kaynak: `tmp_verify_robust`. Yoğunluk alanına MT’nin görmediği küçük ölçekli
+heterojenlik (`HETERO_STD_FRAC = 0.075` × 350 kg/m³). Koşu inversiyon
+skorundan sonra `BoundedCore` hatasıyla kesildi; aşağıdaki sayılar log’daki
+`inversion outcome` bloğundan.
+
+| | yarı-uzay | prior |
+|---|---:|---:|
+| data RMS (best chain) | 4.598 | **3.075** |
+| model RMSE start | 0.456 | 0.524 |
+| model RMSE after | 0.654 | **0.605** |
+| corr after | 0.205 | **0.322** |
+
+Prior başlangıç RMSE 0.524 / corr 0.449 — yayımlanan bozulmamış t1
+(0.547 / 0.438) bu perturbasyonda kötüleşmedi. Tek seed; 3-seed tablosuyla
+karıştırmayın.
 
 ---
 
@@ -300,7 +414,7 @@ Profile2D.jl              2B sürücü
 
 1. Tek küresel gravite–özdirenç eğimi → tek baskın litoloji. Karışık litolojide (Musgrave: dirençli kütle + iletken fay) zorlanır.
 2. TE-only.
-3. `σ` likelihood ile fit edilmez (anchor yok). `SigmaDriveConfig` MT kolon artığı + gravite duyarlılığından hedef harita üretir; `sigma_penalty` onu izler. 3-seed tabloları hâlâ düzgün-σ koşularından; `corr(σ, |μ−truth|)` yeniden ölçülmedi.
+3. `σ` likelihood ile fit edilmez (anchor yok). `SigmaDriveConfig` MT kolon artığı + gravite duyarlılığından hedef harita üretir; `sigma_penalty` onu izler. §4 koşularında `mean(σ) ≈ 0.38`, `corr(σ, |μ−truth|) ≈ +0.3`; kalibre belirsizlik haritası değil ve VFSA’ya girmez.
 4. Gravite derinlik körü: tek 2B harita her kata kopyalanır.
 5. `RealDataIO.jl` Musgrave’e özgü.
 6. Slab eğimi iddiası **geri çekildi**.
@@ -308,6 +422,8 @@ Profile2D.jl              2B sürücü
    Büyüklük için truth-bağımsız tutucu bant: sentetik blind `(-10, −0.1)`,
    Musgrave `(0, 1.5)`. `residual_span` için half_band / `from_baseline` protokolü
    (§4.1); yayımlanan span=2.5 best-case üst sınırdır.
+8. Kazanç jeolojiye bağlı: 55° dik eğimde ve ters polaritede prior NB’yi geçmez (§4.5). Sweep VFSA hızını ölçmez.
+9. Sentetikte `target_rms = 1.0` 3000 iterasyonda da ulaşılmaz; darboğaz RBF (`n_ctrl = 250`), `max_iter` değil (§4.4).
 
 ---
 
@@ -315,12 +431,13 @@ Profile2D.jl              2B sürücü
 
 1. Kötü-konumlu arama + warm-start (bu sayfa, §1).
 2. Girdi/çıktı kutusu (§2) — “joint inversion değil.”
-3. Iter 1 RMS tablosu (§4) — tek slayt, ~150 std.
-4. Seed 3 kesitleri + yakınsama figürleri.
-5. Ablasyon A/B/C/D (§5) — “MLP, doğrusal LS’den ölçülebilir kazanç.”
-6. Musgrave hız iddiası + kaba-ağ negatif sonuç (§6).
-7. Best-case vs blind hiperparametre (§4.1).
-8. Ne kanıtlanmadı (§3, §8).
+3. Iter 1 / iter 400 RMS tablosu (§4) + overlay figür.
+4. VFSA sonrası model uzayı: yapı evet, genlik hayır (§4.3).
+5. Bütçe 400→3000: RBF darboğazı (§4.4).
+6. Jeoloji sweep: 15°–35° evet, 55°/ters polarite hayır (§4.5).
+7. Ablasyon A/B/C/D (§5).
+8. Musgrave hız + kaba-ağ negatif (§6).
+9. Ne kanıtlanmadı (§3, §8).
 
 Tekrarlanabilir koşu:
 
@@ -329,75 +446,25 @@ julia --project=. examples/compare_prior_2d.jl
 julia --project=. examples/ablation_prior_2d.jl
 SMARTPRIOR_PROTOCOL=blind SMARTPRIOR_WORK=tmp_blind_t1 \
   julia --project=. examples/train_prior_blind.jl
+julia --project=. examples/scenario_sweep_prior_2d.jl
 ```
 
 ---
 
-## 10. Genelleştirme planı (sıradaki adımlar)
+## 10. Sıradaki adımlar
 
-Bugüne kadarki tüm sonuçlar (§4–§6) **tek bir jeolojik senaryoya** dayanıyor: 35°
-eğimli, host'a göre daha iletken ve daha yoğun bir slab. 3 seed varyasyonu
-gürültü gerçekleşmesini (MT/eğitim/VFSA/gravite RNG) değiştiriyor, geometriyi
-değil. Aşağıdaki liste, "prior daha hızlı yakınsıyor" iddiasının kaç farklı
-koşulda ayakta durduğunu artırmak için öncelik sırasına göre.
+Jeoloji sweep (§4.5) ve bütçe taraması (§4.4) bitti. `max_iter` kolu kapandı.
 
-### 10.1 Zaten yazılmış, sadece çalıştırılıp rapora eklenmesi gereken
+1. **RBF parametrizasyonu (asıl kol).** `n_ctrl` artır ve/veya daha dar çekirdek
+   (`rbf_sigma_scale`). Tek seed, t1. RMS=1.0’a yaklaşırsa 3-seed’i yeni
+   parametrizasyonla tekrarla. Bütçe 400’de kalabilir.
+2. **Jeoloji → VFSA.** Sweep yalnızca prior vs NB. dip15 (en büyük kazanç) ve
+   dip55 (negatif) için `compare_prior_2d.jl` ile iter 1 / 400 data RMS — “daha
+   hızlı uyduruyor” iddiasını tek geometrinin dışına taşır.
+3. **`train_prior_sensitivity.jl` hâlâ çalıştırılmadı.** `residual_span` ×
+   slope genişliği; beklenen şekil geniş plato, 2.5’te keskin tepe değil.
+4. **Misspec gravite** tek seed olarak raporlandı (§4.6). Script inversiyon
+   sonrası `BoundedCore` ile düşüyor — 3-seed tekrarından önce düzeltilmeli.
 
-Bu ikisi için yeni kod gerekmiyor — script'ler mevcut, sonuç yok:
-
-| Script | Ne test ediyor | Neden eksik |
-|---|---|---|
-| `examples/train_prior_sensitivity.jl` | `residual_span` × `slope_bounds` genişliği — beklenen şekil geniş bir plato, span=2.5'te keskin tepe değil | Çalıştırılmadı; §4.1'de "koşu sonuçları eklenecek" yazıyor |
-| `examples/robustness_misspecified_gravity.jl` | Yoğunluk alanına, MT/özdirenç tarafının hiç görmediği küçük ölçekli heterojenlik eklenince bozulma | Çalıştırılmış olabilir, sonucu hiçbir yerde raporlanmamış |
-
-```bash
-julia --project=. examples/train_prior_sensitivity.jl
-SMARTPRIOR_WORK=tmp_misspec_grav \
-  julia --project=. examples/robustness_misspecified_gravity.jl
-```
-
-### 10.2 Yeni: jeoloji sweep'i (`examples/scenario_sweep_prior_2d.jl`)
-
-Bu script bugün eklendi — mevcut kod tabanında geometriyi değiştiren bir
-altyapı yoktu. VFSA çalıştırmıyor (maliyeti düşük tutmak için sadece prior'u
-eğitip truth'a karşı skorluyor, `train_prior_sensitivity.jl` ile aynı desen);
-4 senaryo:
-
-| Senaryo | Değişen | Test ettiği |
-|---|---|---|
-| `dip15_conductive` | eğim 35°→15° | Sığ eğimde kazanç duruyor mu |
-| `dip35_conductive_published` | — (yayımlanan truth ile birebir) | İç tutarlılık kontrolü: `prior_corr` ARA_RAPOR §4 t1 (0.438) civarına düşmeli |
-| `dip55_conductive` | eğim 35°→55° | Dik eğimde kazanç duruyor mu |
-| `dip35_resistive` | kontrast işareti ters (yoğun+dirençli, `slope_bounds` de aynalanmış) | Öğrenilen eğim işaretinin dışsal varsayımı doğru yönde tutuluyor mu |
-
-```bash
-# tam koşu (~20-40 dk, 4 senaryo × 5 üyeli ensemble × 3000 epoch)
-julia --project=. examples/scenario_sweep_prior_2d.jl
-
-# hızlı keşif (birkaç dakika, güvenilir sayı değil ama şekli gösterir)
-SMARTPRIOR_EPOCHS=400 SMARTPRIOR_NMEMBERS=1 \
-  julia --project=. examples/scenario_sweep_prior_2d.jl
-```
-
-Çıktı `sweep_metrics.tsv`'de `prior_gain_corr` sütunu (prior korelasyonu − NB
-korelasyonu) her senaryo için pozitif kalıyorsa, "kazanç geometriye bağlı
-değil" iddiası bir senaryodan dörde çıkar. Negatife dönen bir satır varsa —
-özellikle `dip35_resistive`, çünkü orada işaret varsayımı ters çevriliyor —
-bunu gizlemeyin, §8 Sınırlamalar'a doğrudan ekleyin.
-
-### 10.3 Bu sweep sonrasında (VFSA'ya taşımaya değer mi)
-
-`scenario_sweep_prior_2d.jl` sadece prior kalitesini (RMSE/korelasyon) ölçüyor,
-VFSA yakınsama hızını değil. En ilginç çıkan 1-2 senaryoyu (en büyük kazanç ve
-en küçük/negatif kazanç) `compare_prior_2d.jl`'e aynı seed'lerle taşıyıp, §4'teki
-gibi iter 1 / iter 400 data RMS tablosu çıkarmak, "yakınsama hızı" iddiasını da
-tek senaryonun ötesine taşır.
-
-### 10.4 Kapsam dışı (bu hafta değil)
-
-- Çoklu cisim / karışık litoloji (Musgrave'in dirençli Giles + iletken zon
-  yapısına benzer sentetik) — §Sınırlamalar madde 1'in doğrudan testi, ama
-  yeni bir truth builder'ı ve muhtemelen `add_block` + `add_dipping_slab`
-  kombinasyonu gerektiriyor.
-- Mesh çözünürlüğü sweep'i — kaba ağda (20 km) zaten negatif sonuç var (§6.2);
-  ince/orta çözünürlük arası bir tarama henüz yok.
+Kapsam dışı (bu aşama değil): çoklu cisim / karışık litoloji sentetiği;
+mesh çözünürlüğü taraması (§6.2 kaba ağ zaten negatif); 3B.

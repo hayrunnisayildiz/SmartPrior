@@ -1,0 +1,13 @@
+scenario	dip35_conductive_published
+dip_deg	35.0
+slab_log_rho	0.6
+slope_bounds	(-4.0, -0.2)
+nb_rmse	0.5555317284602985
+nb_corr	0.42619027305580964
+prior_rmse	0.5443542378381945
+prior_corr	0.43759890859728656
+prior_gain_corr	0.01140863554147692
+ols_a	1.5611409407668697
+ols_b	0.4164325096958779
+epochs	3000
+nmembers	5
