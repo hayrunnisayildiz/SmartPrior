@@ -1,141 +1,146 @@
 # SmartPriorMT
 
-**Tek cümle:** 2B MT (manyetotellürik) ters çözümüne düz bir yarı-uzayla değil,
-gravite + MT verisinden üretilmiş "akıllı" bir başlangıç modeliyle (prior)
-başlıyoruz; bunun inversiyonu hızlandırıp hızlandırmadığını test ediyoruz.
+**One line:** instead of starting 2D MT (magnetotelluric) inversion from a
+flat half-space, we start from a "smart" prior model built from gravity +
+MT data, and test whether this speeds up the inversion.
 
-Sürüm 0.1.0 · Julia 1.10 · MTGeophysics 0.5.0
-Tüm ayrıntılı tablolar, ablasyonlar ve figürler: [`docs/ARA_RAPOR.md`](docs/ARA_RAPOR.md)
+Version 0.1.0 · Julia 1.10 · MTGeophysics 0.5.0
+Full tables, ablations, and figures: [`docs/ARA_RAPOR.md`](docs/ARA_RAPOR.md)
 
 ---
 
-## Özet (TL;DR)
+## Summary (TL;DR)
 
-| Soru | Cevap |
+| Question | Answer |
 |---|---|
-| Prior, veriye daha hızlı uyuyor mu? | **Evet** — 3/3 seed'de, başlangıçtan itibaren tutarlı şekilde |
-| Prior, gerçek modelle daha çok örtüşüyor mu? | **Kısmen** — yapısal korelasyon iyileşiyor, mutlak genlik (RMSE) belirsiz |
-| Her jeolojik senaryoda çalışıyor mu? | **Hayır** — dik eğimli / dirençli-kontrastlı yapılarda geride kalabiliyor |
-| VFSA arama hedefine (RMS=1.0) ulaşıyor mu? | **Hayır** — bütçe artışı (400→3000) kazancın yarısından azını getirdi; darboğaz artık `max_iter` değil, RBF parametrizasyonu |
+| Does the prior fit the data faster? | **Yes** — consistently, from the start, in 3/3 seeds |
+| Does the prior match the true model better? | **Partly** — structural correlation improves, absolute amplitude (RMSE) is unclear |
+| Does it work for every geological scenario? | **No** — it can fall behind on steep-dip / resistive-contrast structures |
+| Does the VFSA search reach its target (RMS = 1.0)? | **No** — increasing the budget (400→3000) brought less than half the expected gain; the bottleneck is no longer `max_iter`, it's the RBF parametrization |
 
-Bu proje bir "joint inversion" değildir. Gravite yalnızca prior üretiminde
-kullanılır; VFSA'nın kendi arama sürecine (χ²) girmez.
-
----
-
-## Proje Nedir?
-
-```
-Gravite + MT verisi (Niblett–Bostick) → Lux ağı → Prior model (μ, σ)
-                                                  → VFSA2DMT (başlangıç modeli olarak)
-```
-
-Amaç: prior'ı başlangıç noktası verip VFSA aramasının (a) veriye daha hızlı
-uyup uymadığını, (b) sonucun gerçek modele daha çok benzeyip benzemediğini
-görmek. Fiziksel çözücü, pertürbasyon ve soğuma çizelgesi değişmiyor — tek
-değişen başlangıç noktası.
+This project is not a joint inversion. Gravity is only used to build the
+prior; it does not enter VFSA's own search process (χ²).
 
 ---
 
-## Ana Bulgular
+## What is the project?
 
-### 1) Prior, veriye daha hızlı uyuyor
+```
+Gravity + MT data (Niblett–Bostick) → Lux network → Prior model (μ, σ)
+                                                    → VFSA2DMT (as the starting model)
+```
 
-3 farklı seed'de, VFSA'nın 400 iterasyon sonundaki veri uyumu (data RMS):
+Goal: give the prior as the starting point and see whether VFSA's search
+(a) fits the data faster, and (b) produces a result that is closer to the
+true model. The forward solver, perturbation, and cooling schedule do not
+change — only the starting point changes.
 
-| Seed | Yarı-uzay | Prior | İyileşme |
+---
+
+## Main Findings
+
+### 1) The prior fits the data faster
+
+Across 3 different seeds, VFSA's data fit (data RMS) after 400 iterations:
+
+| Seed | Half-space | Prior | Improvement |
 |---|---:|---:|---:|
-| t1 | 4.60 | 3.47 | %25 |
-| t2 | 5.02 | 3.64 | %27 |
-| t3 | 5.15 | 3.82 | %26 |
+| t1 | 4.60 | 3.47 | 25% |
+| t2 | 5.02 | 3.64 | 27% |
+| t3 | 5.15 | 3.82 | 26% |
 
-Bu fark büyük ölçüde başlangıç noktasından geliyor: prior, ilk iterasyondan
-itibaren yarı-uzaydan çok daha az hata veriyor (~4.6 vs ~30).
+Most of this difference comes from the starting point: from iteration one,
+the prior already has much lower error than the half-space (~4.6 vs ~30).
 
-**Örnek (t1): yakınsama ve veri uyumu, yarı-uzay vs prior**
+**Example (t1): convergence and data fit, half-space vs prior**
 
-| Yarı-uzay | Prior |
+| Half-space | Prior |
 |---|---|
 | ![t1 half convergence](docs/assets/t1_convergence_half.png) | ![t1 prior convergence](docs/assets/t1_convergence_prior.png) |
 | ![t1 half data fit](docs/assets/t1_data_fit_half.png) | ![t1 prior data fit](docs/assets/t1_data_fit_prior.png) |
 
-### 2) Gerçek modelle örtüşme: yapı evet, genlik belirsiz
+### 2) Match with the true model: structure yes, amplitude unclear
 
-| Ölçüt | Sonuç |
+| Metric | Result |
 |---|---|
-| Korelasyon (gerçek modelle) | Prior 3/3 seed'de daha yüksek (örn. 0.30 vs 0.21) |
-| RMSE (gerçek modelle) | Tutarsız — bazı seed'lerde prior daha iyi, bazılarında değil |
+| Correlation (with true model) | Prior is higher in 3/3 seeds (e.g. 0.30 vs 0.21) |
+| RMSE (with true model) | Inconsistent — prior is better in some seeds, not in others |
 
-Yorum: prior, yapıyı (nerede iletken/dirençli) daha doğru yakalıyor ama
-mutlak direnç değerlerinde garanti bir kazanç yok.
+Interpretation: the prior captures the *structure* (where conductive /
+resistive zones are) more accurately, but there is no guaranteed gain in
+absolute resistivity values.
 
-**Örnek (t1): inversiyon sonrası ortalama model, gerçek modelle karşılaştırma**
+**Example (t1): mean model after inversion, compared to the true model**
 
-| Yarı-uzay | Prior |
+| Half-space | Prior |
 |---|---|
 | ![t1 half model mean](docs/assets/t1_model_mean_half.png) | ![t1 prior model mean](docs/assets/t1_model_mean_prior.png) |
 
-### 3) Her jeolojide işe yaramıyor
+### 3) It doesn't work for every geology
 
-4 farklı sentetik jeoloji senaryosunda (VFSA'sız, doğrudan prior vs NB
-karşılaştırması): sığ/orta eğimli iletken yapılarda prior belirgin şekilde
-iyi, dik eğimli veya dirençli-kontrastlı yapılarda geride kalıyor.
+Across 4 different synthetic geology scenarios (no VFSA, direct prior vs NB
+comparison): the prior is clearly better for shallow/medium-dip conductive
+structures, but falls behind for steep-dip or resistive-contrast structures.
 
-**Tam tablolar, ablasyon sonuçları, sigma/belirsizlik analizi ve Musgrave
-(gerçek veri) sonuçları için:** [`docs/ARA_RAPOR.md`](docs/ARA_RAPOR.md)
+**For full tables, ablation results, sigma/uncertainty analysis, and
+Musgrave (real data) results, see:** [`docs/ARA_RAPOR.md`](docs/ARA_RAPOR.md)
 
 ---
 
-## Sonuç: VFSA Bütçesi Değil, Parametrizasyon Darboğaz
+## Conclusion: Not a VFSA Budget Problem — a Parametrization Bottleneck
 
-Yukarıdaki sonuçlar `max_iter=400` ile alındı. Hedef veri uyumu
-(`target_rms=1.0`) — mevcut sonuçlar bunun üzerinde kalıyor. Bunu çözmek için
-bütçeyi kademeli artırıp test ettik: 400 → 800 → 3000 iterasyon.
+The results above were obtained with `max_iter=400`. The target data fit
+(`target_rms=1.0`) — current results stay above this. To address it, we
+tested increasing the budget in steps: 400 → 800 → 3000 iterations.
 
-**t1'de bütçe artışının etkisi (en iyi zincir, final RMS):**
+**Effect of budget on t1 (best chain, final RMS):**
 
-| bütçe | prior | yarı-uzay |
+| budget | prior | half-space |
 |---|---:|---:|
 | 400 | 3.47 | 4.60 |
 | 800 | 2.90 | 3.87 |
 | 3000 | **2.64** | **3.50** |
 
-**Sonuç netleşti:**
+**The conclusion is now clear:**
 
-- **Eski 400-iter teşhisi doğru çıktı** — o "plato" değil, kısa bütçeydi.
-- **Ama 3000 de yetmiyor.** 800→3000 arası 5.5× daha fazla iterasyon
-  harcandı, kazancın yarısından azı geldi. Son 200 iterasyonda eğim
-  ~−0.0003/iter, kabul oranı %4–9 — soğuk uçta arama neredeyse durmuş.
-  Kalan fark (~1.6 RMS) artık iterasyonla kapanmıyor.
-- **Sebep muhtemelen RBF parametrizasyonu.** 250 kontrol noktası ve
-  ~800–1000 m çekirdek genişliği, %5 gürültülü 2B veriyi RMS=1'e kadar temsil
-  etmeye yetmiyor olabilir. `step_scale` darboğaz değildi.
-- **Prior'a "kilitlenme" değil.** Prior, veriye yarı-uzaydan tutarlı şekilde
-  daha iyi oturuyor (2.64 vs 3.50) — bu bir arama artefaktı değil, gerçek bir
-  başlangıç avantajı. Yarı-uzay bütçe arttıkça yaklaşıyor ama geçmiyor.
-- **Truth RMSE ayrı bir konu olarak kalıyor.** VFSA, gürültülü veriye uyuyor;
-  data RMS düşmesi otomatik olarak gerçek modele yaklaşmak anlamına gelmiyor
-  (bkz. "Gerçek modelle örtüşme" bulgusu).
+- **The original 400-iteration diagnosis was correct** — that was not a
+  "plateau," it was a short budget.
+- **But 3000 isn't enough either.** Going from 800 to 3000 used 5.5× more
+  iterations, but delivered less than half of the hoped-for gain. In the
+  last 200 iterations the slope is ~−0.0003/iter, acceptance rate 4–9% —
+  the search has almost stopped in the cold regime. The remaining gap
+  (~1.6 RMS) no longer closes with more iterations.
+- **The likely cause is the RBF parametrization.** 250 control points and a
+  ~800–1000 m kernel width may not be enough to represent the noisy (5%)
+  2D data down to RMS=1.0. `step_scale` was not the bottleneck.
+- **This is not the prior "locking" the search.** The prior consistently
+  fits the data better than the half-space (2.64 vs 3.50) — this is a real
+  advantage from the starting point, not a search artifact. The half-space
+  gets closer with more budget, but does not overtake it.
+- **True-model RMSE remains a separate question.** VFSA fits the noisy
+  data; a lower data RMS does not automatically mean the result is closer
+  to the true model (see the "match with the true model" finding above).
 
-**Pratik sonuç:** yukarıdaki 400-iter tablo start-bağımlı, tam yakınsamamış
-bir aramadan geliyor — ama bu, prior'ın veri uyumunu hızlandırdığı bulgusunu
-geçersiz kılmıyor. RMS=1 hedefleniyorsa sıradaki kaldıraç `max_iter` değil;
-`n_ctrl` artırımı, daha dar RBF çekirdeği veya farklı bir parametrizasyon.
-
----
-
-## Sonraki Adımlar
-
-1. RBF parametrizasyonunu ayarla: `n_ctrl` artırımı ve/veya daha dar çekirdek
-   (`rbf_sigma_scale` küçültme) — t1'de tek seed sonda
-2. Sonda RMS=1 hedefine yaklaşırsa 3-seed doğrulamasını yeni parametrizasyonla
-   tekrar çalıştır
-3. `max_iter` artık kaldıraç değil — bütçe 400'de sabitlenebilir, kazanılan
-   zaman parametrizasyon aramasına aktarılabilir
+**Practical takeaway:** the 400-iteration table above comes from a
+start-dependent, not-fully-converged search — but this does not invalidate
+the finding that the prior speeds up data fitting. If RMS=1.0 is the goal,
+the next lever is not `max_iter`; it's increasing `n_ctrl`, using a
+narrower RBF kernel, or a different parametrization.
 
 ---
 
-## Kurulum ve Hızlı Başlangıç
+## Next Steps
+
+1. Tune the RBF parametrization: increase `n_ctrl` and/or use a narrower
+   kernel (smaller `rbf_sigma_scale`) — single-seed probe on t1
+2. If the probe gets closer to RMS=1.0, re-run the full 3-seed validation
+   with the new parametrization
+3. `max_iter` is no longer the lever — the budget can stay fixed at 400,
+   and the freed-up time can go into this parametrization search instead
+
+---
+
+## Installation and Quick Start
 
 ```julia
 using Pkg
@@ -147,11 +152,12 @@ Pkg.instantiate()
 julia --project=. examples/compare_prior_2d.jl
 ```
 
-Sentetik eğimli iletken slab üzerinde yarı-uzay vs prior karşılaştırması
-çalıştırır (aynı seed, aynı VFSA ayarları). Diğer örnek komutlar (ablasyon,
-blind protokol, jeoloji sweep'i) için [`docs/ARA_RAPOR.md`](docs/ARA_RAPOR.md).
+Runs a half-space vs prior comparison on a synthetic dipping conductive
+slab (same seed, same VFSA settings). For other example commands
+(ablation, blind protocol, geology sweep), see
+[`docs/ARA_RAPOR.md`](docs/ARA_RAPOR.md).
 
-| Paket | Compat |
+| Package | Compat |
 |---|---|
 | ArchGDAL | 0.10.12 |
 | ComponentArrays | 0.15.47 |
@@ -167,22 +173,25 @@ blind protokol, jeoloji sweep'i) için [`docs/ARA_RAPOR.md`](docs/ARA_RAPOR.md).
 
 ---
 
-## Bilinen Sınırlamalar (kısa)
+## Known Limitations (brief)
 
-- **Tek litoloji varsayımı:** tek bir gravite–özdirenç eğimi kullanılıyor;
-  karışık litolojili sahalarda (örn. Musgrave) güvenilirlik düşer.
-- **TE-only:** TM modu var ama istasyon-bazlı hata kalibrasyonu henüz yok.
-- **`σ` kalibre bir belirsizlik haritası değil** — inversiyona da girmiyor.
-- **Kısmi ters suç:** gravite operatöründe var (aynı ileri model hem sentetik
-  veri hem inversiyon için), petrofizik ve MT tarafında yok.
-- **3B warm-start kapsam dışı** — upstream (`MTGeophysics`) hücre-bazlı sınır
-  desteklemiyor.
-- **VFSA bütçesi henüz hedefe ulaşmıyor** (yukarıda detaylı).
+- **Single-lithology assumption:** a single gravity–resistivity slope is
+  used; reliability drops in mixed-lithology settings (e.g. Musgrave).
+- **TE-only:** TM mode exists, but station-wise error calibration is not
+  implemented yet.
+- **`σ` is not a calibrated uncertainty map** — and it does not enter the
+  inversion either.
+- **Partial inverse crime:** present in the gravity operator (the same
+  forward model is used for both synthetic data generation and inversion),
+  not present on the petrophysics or MT side.
+- **3D warm-start is out of scope** — the upstream package (`MTGeophysics`)
+  does not support cell-wise bounds.
+- **The VFSA budget still doesn't reach the target** (details above).
 
-Tam liste ve gerekçeler: [`docs/ARA_RAPOR.md`](docs/ARA_RAPOR.md)
+Full list and rationale: [`docs/ARA_RAPOR.md`](docs/ARA_RAPOR.md)
 
 ---
 
-## Lisans
+## License
 
-MIT, bkz. [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).
