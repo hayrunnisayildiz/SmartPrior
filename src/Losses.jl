@@ -173,19 +173,27 @@ MT misfit computed one column at a time with the 1-D solver.
 
 `site_cells` gives the `(i, j)` grid column under each site. Apparent resistivity
 enters in log10 so that a decade of error costs the same wherever it happens, and
-phase in degrees scaled by `phase_weight`.
+phase in degrees.
 
-When `sites.err_rho_a` and `sites.err_phase` are omitted, the term is the original
-unnormalised mean square — not chi-squared per datum, and not in the same units
-as [`gravity_misfit`](@ref). Supply those errors and each residual is divided by
-the uncertainty in the space the residual is scored in, which makes the term
-χ²/datum. Gravity and MT weights are then comparable: a value near one means
-the column is explained to within its uncertainty.
+Apparent resistivity and phase are two separate data types, so the result is the
+**weighted mean** of their two misfits with weights `(1, phase_weight)`, averaged
+over sites. `phase_weight` therefore re-partitions the term between the two
+curves instead of adding to its size: the perfect-fit and one-sigma values do not
+move when it changes. Summing the two instead would make the term score
+`1 + phase_weight` at a one-sigma fit and hand MT `1 + phase_weight` times
+gravity's pull under nominally equal [`LossWeights`](@ref).
+
+When `sites.err_rho_a` and `sites.err_phase` are omitted, the residuals are not
+divided by an uncertainty, so the term is not chi-squared per datum and not in
+the same units as [`gravity_misfit`](@ref). Supply those errors and each residual
+is divided by the uncertainty in the space the residual is scored in, which makes
+the term χ²/datum on gravity's scale: a value near one means the column is
+explained to within its uncertainty, and pushing below one is fitting noise.
 
 Apparent-resistivity errors arrive in ohm-metres. The residual is `log10 ρ`, so
 the error is converted by first-order propagation,
 `δ(log10 ρ) ≈ δρ / (ρ ln 10)`, before the division. Phase errors are already in
-degrees. `phase_weight` still multiplies the phase term in either mode.
+degrees.
 
 A 1-D response per column is not the 3-D response of the model, so this is a
 consistency term rather than a data fit: it stops the network proposing a column
@@ -204,6 +212,8 @@ function mt_column_misfit(mu::AbstractArray{<:Real,3},
     nx, ny, nz = size(grid)
     size(mu) == (nx, ny, nz) || throw(DimensionMismatch(
         "mt_column_misfit: mu must match the grid $(nx)x$(ny)x$(nz), got $(size(mu))"))
+    phase_weight >= 0 || throw(ArgumentError(
+        "mt_column_misfit: phase_weight must be non-negative, got $(phase_weight)"))
 
     have_err_a = sites.err_rho_a !== nothing
     have_err_p = sites.err_phase !== nothing
@@ -250,7 +260,12 @@ function mt_column_misfit(mu::AbstractArray{<:Real,3},
             total += phase_weight * mean(abs2.((pred_p .- obs_p) ./ 45.0))
         end
     end
-    return total / ns
+    # Apparent resistivity and phase are two data types, and the site loop adds
+    # one chi-squared-per-datum for each. Dividing by their weights turns that
+    # sum into a weighted mean, which is what puts the term on gravity_misfit's
+    # scale: a one-sigma residual on every datum scores 1.0, not 1 + phase_weight.
+    # Without it `LossWeights(gravity = 1, mt = 1)` gives MT twice the pull.
+    return total / (ns * (1 + phase_weight))
 end
 
 """

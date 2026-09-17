@@ -57,7 +57,8 @@ the Berdichevsky mean rather than a single off-diagonal component.
 `err_rho_a` and `err_phase` are optional keyword-only `[nperiod, nsite]`
 uncertainties in the same units as `rho_a` and `phase`. The five-argument
 positional constructor is unchanged: omit them and they stay `nothing`, which
-keeps [`mt_column_misfit`](@ref) on its original unnormalised formula.
+leaves [`mt_column_misfit`](@ref) scoring raw residuals rather than χ²/datum, so
+its weight is no longer comparable to the gravity term's.
 """
 struct MTSites
     x::Vector{Float64}

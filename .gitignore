@@ -27,6 +27,8 @@ tmp_ablation/
 tmp_ablation_gsens/
 tmp_blind*/
 tmp_bestcase*/
+tmp_mtnorm*/
+tmp_smoothsweep*/
 tmp_diag*/
 tmp_scenario_sweep*/
 tmp_blind_vs_bestcase_metrics.tsv

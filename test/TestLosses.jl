@@ -201,30 +201,45 @@ end
     @test mt_column_misfit(mu_true, g, sites_exact, cells) < 1e-4
 
     # shift ρ_a by exactly one sigma in log10 space so residual/err = 1 on every
-    # resistivity datum (phase left exact). That is gravity_misfit with :none
-    # and a one-sigma residual: χ²/datum = 1
+    # resistivity datum, phase left exact. ρ_a and phase are two data types
+    # averaged with weights (1, phase_weight), so one of the two being one sigma
+    # out and the other exact scores 1/2 at the default weight
     δlog10 = 0.05
     obs_a = hcat(a, a) ./ (10^δlog10)
     err_one = fill(δlog10, np, ns) .* obs_a .* log(10)
     sites_one = MTSites(sx, sy, periods, obs_a, hcat(p, p);
                         err_rho_a = err_one, err_phase = err_p)
     m_one = mt_column_misfit(mu_true, g, sites_one, cells)
+    @test m_one ≈ 0.5 atol = 1e-4
+
+    # one sigma on *both* data types is the value that has to agree with
+    # gravity_misfit's one-sigma residual, or nominally equal LossWeights do not
+    # mean equal pull
+    obs_p_one = hcat(p, p) .- err_p
+    sites_both = MTSites(sx, sy, periods, obs_a, obs_p_one;
+                         err_rho_a = err_one, err_phase = err_p)
     g_one = gravity_misfit([1.0 0.0; 0.0 2.0], [4.0, 2.5], [3.0, 4.0], [1.0, 1.0];
                            detrend = :none)
     @test g_one ≈ 1.0
-    @test m_one ≈ 1.0 atol = 1e-4
+    @test mt_column_misfit(mu_true, g, sites_both, cells) ≈ 1.0 atol = 1e-4
 
     # a decade-off half-space is many sigma under the same errors
     @test mt_column_misfit(mu_wrong, g, sites_one, cells) > 100
 
-    # phase_weight still scales the phase term once err_phase is in play
+    # phase_weight re-partitions the mean between the two curves rather than
+    # inflating it: with ρ_a exact and phase one sigma out the value is
+    # phase_weight / (1 + phase_weight), which saturates at one instead of growing
     obs_p = hcat(p, p) .+ 3.0
     sites_phase = MTSites(sx, sy, periods, hcat(a, a), obs_p;
                           err_rho_a = err_a, err_phase = fill(3.0, np, ns))
-    m_phase = mt_column_misfit(mu_true, g, sites_phase, cells)
-    @test m_phase ≈ 1.0 atol = 1e-4
+    @test mt_column_misfit(mu_true, g, sites_phase, cells) ≈ 0.5 atol = 1e-4
     @test mt_column_misfit(mu_true, g, sites_phase, cells; phase_weight = 2.0) ≈
-          2 * m_phase atol = 1e-4
+          2 / 3 atol = 1e-4
+    @test mt_column_misfit(mu_true, g, sites_phase, cells; phase_weight = 0.0) <
+          1e-4
+
+    @test_throws ArgumentError mt_column_misfit(mu_true, g, sites_phase, cells;
+                                                phase_weight = -1.0)
 end
 
 @testset "smoothness" begin
