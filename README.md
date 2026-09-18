@@ -189,6 +189,7 @@ Tests: `julia --project=. -e 'using Pkg; Pkg.test()'`.
 | `src/KeivitsaIO.jl` | GTK readers (previous case study) |
 | `src/{Grid,Features,PriorNet,Losses,Train}.jl` | shared neural-field stack |
 | `examples/train_cloncurry_prior.jl` | train (full-data) |
+| `examples/export_cloncurry_blockmodel.jl` | VTK + 3D Cu isosurface from a checkpoint |
 | `examples/holdout_cloncurry_prior.jl` | spatial Cu hold-out (not yet a completed run) |
 | `examples/train_keivitsa_prior.jl` | previous case study |
 | `tmp_cloncurry_prior/` | work-box health check (gitignored) |
@@ -251,6 +252,15 @@ assay. Grid occupancy on D is 104 / 57,816 = 0.18%. Only 8 cells are
 
 A 50-epoch work-box health check (`tmp_cloncurry_prior/`) is not a result:
 1000 m cells stacked 347 Cu samples into 48 cells.
+
+Predicted Cu on D, nested 500 / 2,000 / 5,000 ppm shells. Black points are
+the 255 METAL Cu samples. **In-sample** (104 grade-anchor cells); not a
+hold-out. The predicted field has 96 cells ≥ 5,000 ppm (max 16,003 ppm)
+even though only 8 of those 104 anchors sit at ≥ 5,000 ppm.
+
+![Ernest Henry D — predicted Cu isosurface](docs/assets/cloncurry_eh_cu_iso.png)
+
+Rebuild: `examples/export_cloncurry_blockmodel.jl` (writes `.vts` + PNG).
 
 ---
 
