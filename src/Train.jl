@@ -159,15 +159,36 @@ function _with(c::TrainConfig; kwargs...)
 end
 
 function _train_loss(net::PriorNet, X, st, grid, targets, weights, offset, p)
-    (mu, sigma), _ = predict(net, X, p.net, st; offset = offset)
-    return prior_loss(mu, sigma, coupling_of(p), grid, targets, weights)
+    pred, _ = predict(net, X, p.net, st; offset = offset)
+    return prior_loss(pred[1], pred[2], coupling_of(p), grid, targets, weights)
+end
+
+function _replace_sigma_vec(t::PriorTargets, sigma_vec)
+    return PriorTargets(
+        anchors = t.anchors,
+        gravity = t.gravity,
+        mt = t.mt,
+        reference = t.reference,
+        gravity_detrend = t.gravity_detrend,
+        sigma_target = t.sigma_target,
+        sigma_drive = t.sigma_drive,
+        sigma_target_vec = sigma_vec,
+        phase_weight = t.phase_weight,
+        vertical_weight = t.vertical_weight,
+        reference_weight = t.reference_weight,
+        anchors_grade = t.anchors_grade,
+        anchors_density = t.anchors_density,
+        anchors_susceptibility = t.anchors_susceptibility,
+        anchors_resistivity = t.anchors_resistivity,
+        property_names = t.property_names,
+    )
 end
 
 # fraction of cells sitting within `tol` of the edge of their reachable band.
 # tanh is flat there, so these cells have stopped contributing a gradient
 function _saturation(net::PriorNet, mu::AbstractVector,
                      offset::Union{Nothing,AbstractVector}; tol::Real = 1.0e-3)
-    lo, hi = net.log_rho_bounds
+    lo, hi = net.mu_bounds[1]
     n = length(mu)
     n == 0 && return 0.0
     hit = 0
@@ -176,11 +197,25 @@ function _saturation(net::PriorNet, mu::AbstractVector,
             lo, hi
         else
             o = clamp(offset[c], lo, hi)
-            max(lo, o - net.residual_span), min(hi, o + net.residual_span)
+            max(lo, o - net.residual_spans[1]), min(hi, o + net.residual_spans[1])
         end
         (mu[c] <= l + tol || mu[c] >= u - tol) && (hit += 1)
     end
     return hit / n
+end
+
+function _saturation(net::PriorNet, mus::AbstractMatrix,
+                     offset::Union{Nothing,AbstractVector}; tol::Real = 1.0e-3)
+    P, n = size(mus)
+    n == 0 && return 0.0
+    hit = 0
+    @inbounds for p in 1:P
+        lo, hi = net.mu_bounds[p]
+        for c in 1:n
+            (mus[p, c] <= lo + tol || mus[p, c] >= hi - tol) && (hit += 1)
+        end
+    end
+    return hit / (P * n)
 end
 
 """
@@ -238,7 +273,7 @@ function train_prior(net::PriorNet,
                  only survives if it buys more misfit reduction than it costs."""
     end
 
-    if targets.sigma_drive === nothing && targets.anchors === nothing &&
+    if targets.sigma_drive === nothing && !_has_any_anchors(targets) &&
        targets.mt !== nothing
         @warn """train_prior: MT data are present but σ has no data term. \
                  Anchors are absent, so heteroscedastic_nll never fires, and \
@@ -262,22 +297,11 @@ function train_prior(net::PriorNet,
         # ---- data-driven sigma targets (outside AD) ----
         effective_targets = if use_sigma_drive
             (mu_now, _), _ = predict(net, X, params.net, st; offset = offset)
+            mu_vec = mu_now isa AbstractMatrix ? vec(mu_now[end, :]) : collect(Float64, mu_now)
             sigma_vec = compute_sigma_targets(
-                collect(Float64, mu_now), grid, targets, coupling_of(params);
+                mu_vec, grid, targets, coupling_of(params);
                 config = targets.sigma_drive)
-            PriorTargets(
-                anchors = targets.anchors,
-                gravity = targets.gravity,
-                mt = targets.mt,
-                reference = targets.reference,
-                gravity_detrend = targets.gravity_detrend,
-                sigma_target = targets.sigma_target,
-                sigma_drive = targets.sigma_drive,
-                sigma_target_vec = sigma_vec,
-                phase_weight = targets.phase_weight,
-                vertical_weight = targets.vertical_weight,
-                reference_weight = targets.reference_weight,
-            )
+            _replace_sigma_vec(targets, sigma_vec)
         else
             targets
         end
@@ -304,8 +328,21 @@ function train_prior(net::PriorNet,
 
             push!(history, entry)
 
-            config.verbose && @printf("epoch %6d  total %.5e  slope %+.3f  sat %.3f\n",
-                                      epoch, report.total, slope, sat)
+            if config.verbose
+                @printf("epoch %6d  total %.5e  slope %+.3f  sat %.3f",
+                        epoch, report.total, slope, sat)
+                for (label, field) in (("grade", :grade), ("dens", :density),
+                                       ("sus", :susceptibility), ("res", :resistivity),
+                                       ("sm", :smooth), ("sig", :sigma))
+                    t = getfield(report, field)
+                    isfinite(t) || continue
+                    w = getfield(config.weights, field)
+                    share = report.total != 0 ? 100 * w * t / report.total : NaN
+                    @printf("  %s %.1f%%", label, share)
+                end
+                println()
+                flush(stdout)
+            end
 
             if report.total < best_loss - config.min_delta
                 best_loss = report.total
@@ -455,6 +492,7 @@ function save_prior(path::AbstractString, net::PriorNet, params, history;
                  log_rho_bounds = net.log_rho_bounds,
                  residual_span = net.residual_span,
                  sigma_bounds = net.sigma_bounds,
+                 sigma_bounds_per = net.sigma_bounds_per,
                  meta = Dict{String,Any}(meta))
     return path
 end
@@ -478,6 +516,7 @@ function load_prior(path::AbstractString)
          log_rho_bounds = file["log_rho_bounds"],
          residual_span = file["residual_span"],
          sigma_bounds = file["sigma_bounds"],
+         sigma_bounds_per = haskey(file, "sigma_bounds_per") ? file["sigma_bounds_per"] : nothing,
          meta = file["meta"])
     end
 end

@@ -15,4 +15,5 @@ using SmartPriorMT
     include("TestMetrics.jl")
     include("TestProfile2D.jl")
     include("TestRealDataIO.jl")
+    include("TestKeivitsaIO.jl")
 end

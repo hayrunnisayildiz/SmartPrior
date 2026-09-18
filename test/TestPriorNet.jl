@@ -67,6 +67,44 @@ end
     @test_throws ArgumentError PriorNet(4; residual_span = 0.0)
 end
 
+@testset "PriorNet: multi-property outputs" begin
+    net = PriorNet(6; width = 16, depth = 2, nproperties = 4,
+                   mu_bounds = [(0.0, 5.0), (2.0, 4.0), (-1.0, 6.0), (-1.0, 7.0)],
+                   sigma_bounds = (0.05, 1.2))
+    @test net.nproperties == 4
+    @test net.property_names == ["grade", "density", "susceptibility", "resistivity"]
+    ps, st = setup_prior(Xoshiro(2), net)
+    X = randn(Xoshiro(3), 6, 40)
+    (mus, sigmas), _ = predict(net, X, ps, st)
+    @test size(mus) == (4, 40)
+    @test size(sigmas) == (4, 40)
+    @test all(0.0 .<= mus[1, :] .<= 5.0)
+    @test all(2.0 .<= mus[2, :] .<= 4.0)
+    @test all(-1.0 .<= mus[3, :] .<= 6.0)
+    @test all(-1.0 .<= mus[4, :] .<= 7.0)
+    @test all(0.05 .<= sigmas .<= 1.2)
+    @test_throws ArgumentError predict(net, X, ps, st; offset = zeros(40))
+    @test_throws ArgumentError predict_grid(net, X, ps, st, (2, 4, 5))
+
+    net_floor = PriorNet(6; width = 16, depth = 2, nproperties = 4,
+                         mu_bounds = [(0.0, 5.0), (2.0, 4.0), (-1.0, 6.0), (-1.0, 7.0)],
+                         sigma_bounds_per = [(0.20, 1.0), (0.08, 0.9), (0.30, 1.5), (0.40, 2.0)])
+    psf, stf = setup_prior(Xoshiro(4), net_floor)
+    (_, sigf), _ = predict(net_floor, X, psf, stf)
+    @test all(0.20 .<= sigf[1, :] .<= 1.0)
+    @test all(0.08 .<= sigf[2, :] .<= 0.9)
+    @test all(0.30 .<= sigf[3, :] .<= 1.5)
+    @test all(0.40 .<= sigf[4, :] .<= 2.0)
+
+    # a single-property net is still the original 2-output contract
+    net1 = PriorNet(6; width = 8, depth = 2)
+    @test net1.nproperties == 1
+    ps1, st1 = setup_prior(Xoshiro(1), net1)
+    (mu, sigma), _ = predict(net1, X, ps1, st1)
+    @test mu isa AbstractVector
+    @test length(mu) == 40
+end
+
 @testset "setup_prior precision" begin
     net = PriorNet(6; width = 8, depth = 2)
     ps64, st = setup_prior(Xoshiro(1), net)
@@ -205,4 +243,23 @@ end
     gout = grad.layer_3.weight
     @test any(!iszero, gout[1, :])
     @test any(!iszero, gout[2, :])
+end
+
+@testset "multi-property predict is differentiable on every row" begin
+    net = PriorNet(8; width = 16, depth = 2, nproperties = 4)
+    ps, st = setup_prior(Xoshiro(9), net)
+    X = randn(Xoshiro(2), 8, 20)
+    target = randn(Xoshiro(6), 4, 20)
+
+    function loss(p)
+        (mus, sigmas), _ = predict(net, X, p, st)
+        return mean(@. 0.5 * ((target - mus) / sigmas)^2 + log(sigmas))
+    end
+
+    grad = Zygote.gradient(loss, ps)[1]
+    gout = grad.layer_3.weight
+    @test size(gout, 1) == 8
+    for r in 1:8
+        @test any(!iszero, gout[r, :])
+    end
 end

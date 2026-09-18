@@ -72,6 +72,7 @@ include("Grid.jl")
 include("Gravity.jl")
 include("MT1DAD.jl")
 include("Features.jl")
+include("KeivitsaIO.jl")
 include("PriorNet.jl")
 include("Losses.jl")
 include("Train.jl")
@@ -85,6 +86,7 @@ include("RealDataIO.jl")
 # grid
 export PriorGrid
 export ncells, cell_volumes, cell_centers, normalized_centers, depth_below_top
+export containing_cell
 
 # gravity
 export prism_gz, gravity_matrix, gravity_cell_sensitivity, forward_gravity
@@ -94,12 +96,13 @@ export mt1d_impedance, mt1d_apparent, mt1d_column_response
 export skin_depth, bostick_depth, bostick_resistivity, niblett_bostick
 
 # observations and features
-export GravityObs, MTSites, FeatureStack
+export GravityObs, MTSites, FeatureStack, PointSamples, LabelSamples
 export nsites, nchannels, build_features, feature_matrix, nb_baseline
 export nb_baseline_lateral_std, residual_span_half_band, residual_span_from_baseline
 export standardize, extrude, idw_to_grid, gaussian_smooth_xy, gradient_xy
 export gravity_channels, topography_channels, depth_channels, coverage_channels
 export gravity_sensitivity_channel
+export nearest_sample_channels, geochemistry_channels, lithology_channels
 
 # neural field
 export PriorNet, setup_prior, predict, predict_grid
@@ -110,6 +113,7 @@ export GravityCoupling, density_from_mu, physical_slope, DENSITY_SCALE
 export heteroscedastic_nll, gravity_misfit, mt_column_misfit, smoothness, reference_penalty, sigma_penalty
 export SigmaDriveConfig, mt_column_residuals, compute_sigma_targets
 export LossWeights, PriorTargets, prior_loss, loss_report
+export sigma_bounds_from_anchors
 
 # training
 export TrainConfig, TrainResult, PriorEnsemble
@@ -134,5 +138,16 @@ export grid_from_mt2dmesh, to_mt2d, from_mt2d, profile_sites
 
 # field EDI
 export read_musgrave_edi, build_musgrave_datafile2d, musgrave_phase_tensor_skew
+
+# Keivitsa (GTK) non-geophysical prior line
+export cu_log10, merge_petro_pair, read_petro_txt, petro_coverage
+export read_keivitsa_grid_bounds, keivitsa_grid, keivitsa_report_root
+export load_keivitsa_collars, load_keivitsa_surveys
+export load_keivitsa_geochemistry, load_keivitsa_lithology
+export load_keivitsa_drill_geochemistry, combine_geochemistry
+export keivitsa_cleaned_intervals_path
+export load_keivitsa_grade_anchors, load_keivitsa_petrophysics_anchors
+export map_points_to_cells, aggregate_to_cells, desurvey_depths
+export KEIVITSA_PETRO_STATUS, KEIVITSA_GEOCHEM_PRIORITY, KEIVITSA_DRILL_GEOCHEM
 
 end # module

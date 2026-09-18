@@ -158,6 +158,35 @@ function normalized_centers(g::PriorGrid)
     return Xn, Yn, Zn
 end
 
+"""
+    containing_cell(g::PriorGrid, x, y, z) -> Int
+
+Linear index of the cell that contains `(x, y, z)`, or `0` if the point lies
+outside the grid box (including the far faces, which belong to no cell).
+
+Used to map borehole samples onto the prior mesh: a point on a cell's positive
+face falls into the next cell, matching the half-open interval `[edge[i], edge[i+1])`
+except that the last cell includes its far edge so a sample sitting exactly on
+`grid.x[end]` is not dropped.
+"""
+function containing_cell(g::PriorGrid, x::Real, y::Real, z::Real)
+    nx, ny, nz = size(g)
+    (isfinite(x) && isfinite(y) && isfinite(z)) || return 0
+    if x < g.x[1] || x > g.x[end] || y < g.y[1] || y > g.y[end] ||
+       z < g.z[1] || z > g.z[end]
+        return 0
+    end
+
+    i = searchsortedlast(g.x, x)
+    j = searchsortedlast(g.y, y)
+    k = searchsortedlast(g.z, z)
+    i = i > nx ? nx : i
+    j = j > ny ? ny : j
+    k = k > nz ? nz : k
+    (i < 1 || j < 1 || k < 1) && return 0
+    return LinearIndices((nx, ny, nz))[i, j, k]
+end
+
 function Base.show(io::IO, g::PriorGrid)
     nx, ny, nz = size(g)
     @printf(io, "PriorGrid(%d x %d x %d, extent %.1f x %.1f x %.1f km)",

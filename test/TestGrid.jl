@@ -15,6 +15,11 @@ using MTGeophysics: write_ws3d_model, load_ws3d_model
     @test g.cx ≈ [-300.0, -150.0, 150.0]
     @test g.cz ≈ [5.0, 20.0, 50.0, 110.0]
 
+    @test containing_cell(g, -300.0, -25.0, 5.0) == LinearIndices(size(g))[1, 1, 1]
+    @test containing_cell(g, 349.9, 49.9, 149.9) == ncells(g)
+    @test containing_cell(g, -999.0, 0.0, 5.0) == 0
+    @test containing_cell(g, 0.0, 0.0, NaN) == 0
+
     V = cell_volumes(g)
     @test size(V) == (3, 2, 4)
     @test V[3, 1, 4] ≈ 400.0 * 50.0 * 80.0

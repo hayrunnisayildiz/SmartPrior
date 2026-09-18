@@ -604,3 +604,84 @@ end
     @test isfinite(report.total)
     @test all(isfinite, (report.anchor, report.gravity, report.mt, report.smooth, report.sigma, report.reference))
 end
+
+@testset "four independent named anchor groups" begin
+    g = _loss_grid()
+    n = ncells(g)
+    mus = fill(2.0, 4, n)
+    sigmas = fill(0.5, 4, n)
+    c = GravityCoupling(slope = 0.0)
+
+    t = PriorTargets(
+        anchors_grade = ([1, 2], [2.0, 2.0], [1.0, 1.0]),
+        anchors_density = ([3], [2.0], [1.0]),
+        anchors_susceptibility = ([4], [2.0], [1.0]),
+        anchors_resistivity = ([5], [2.0], [1.0]),
+        property_names = ["grade", "density", "susceptibility", "resistivity"],
+        sigma_target = 0.5,
+    )
+    r = loss_report(mus, sigmas, c, g, t)
+    # constant-valued groups have scale 1, so calibration is 2 × raw NLL
+    @test r.grade ≈ 2 * log(0.5)
+    @test r.density ≈ 2 * log(0.5)
+    @test r.susceptibility ≈ 2 * log(0.5)
+    @test r.resistivity ≈ 2 * log(0.5)
+    @test isnan(r.anchor)
+    @test isnan(r.gravity)
+    @test isnan(r.mt)
+    # each group's NLL is a mean, so a 2-cell grade group has the same term
+    # magnitude as a 1-cell density group — coverage imbalance does not
+    # automatically reweight the loss
+    @test r.grade ≈ r.density
+
+    w2 = LossWeights(density = 2.0, grade = 1.0, susceptibility = 0.0,
+                     resistivity = 0.0, smooth = 0.0, sigma = 0.0)
+    r2 = loss_report(mus, sigmas, c, g, t, w2)
+    @test r2.total ≈ 1.0 * r2.grade + 2.0 * r2.density
+
+    # named groups are refused on the single-property path
+    @test_throws ArgumentError prior_loss(mus[1, :], sigmas[1, :], c, g, t)
+    @test_throws ArgumentError prior_loss(mus, sigmas, c, g,
+        PriorTargets(anchors = ([1], [2.0], [1.0])))
+end
+
+@testset "named-anchor NLL is calibrated to each group's own std" begin
+    g = _loss_grid()
+    n = ncells(g)
+    mus = zeros(2, n)
+    sigmas = ones(2, n)
+    c = GravityCoupling(slope = 0.0)
+    # group A: std = 1, residual = 1 std, sigma = 1 std → χ²/datum = 1
+    # group B: same geometry scaled ×10, including sigma
+    mus[1, 1:2] .= 1.0
+    mus[2, 1:2] .= 10.0
+    sigmas[1, 1:2] .= 1.0
+    sigmas[2, 1:2] .= 10.0
+    t = PriorTargets(
+        anchors_grade = ([1, 2], [0.0, 2.0], [1.0, 1.0]),
+        anchors_density = ([1, 2], [0.0, 20.0], [1.0, 1.0]),
+        property_names = ["grade", "density"],
+    )
+    r = loss_report(mus, sigmas, c, g, t)
+    @test r.grade ≈ 1.0 atol = 1e-10
+    @test r.density ≈ 1.0 atol = 1e-10
+    @test r.grade ≈ r.density
+
+    # without calibration, density's log(sigma) would dwarf grade
+    raw_g = heteroscedastic_nll(mus[1, 1:2], sigmas[1, 1:2], [0.0, 2.0])
+    raw_d = heteroscedastic_nll(mus[2, 1:2], sigmas[2, 1:2], [0.0, 20.0])
+    @test raw_d > raw_g + 1.0
+end
+
+@testset "sigma_bounds_from_anchors follows group std" begin
+    # values 0, 1, 2 with equal weight: std = √(2/3)
+    anchors = ([1, 2, 3], [0.0, 1.0, 2.0], [1.0, 1.0, 1.0])
+    s = sqrt(2 / 3)
+    lo, hi = sigma_bounds_from_anchors(anchors; fraction = 1.0, hi = 1.2)
+    @test lo ≈ s
+    @test hi ≈ 2 * s
+    lo2, hi2 = sigma_bounds_from_anchors(anchors; fraction = 0.5, hi = 0.1)
+    @test lo2 ≈ 0.5 * s
+    @test hi2 ≈ 2 * s
+    @test_throws ArgumentError sigma_bounds_from_anchors(anchors; fraction = 0.0)
+end

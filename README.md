@@ -1,197 +1,336 @@
-# SmartPriorMT
+# SmartPrior — Geochemistry + Petrophysics Pipeline
 
-**One line:** instead of starting 2D MT (magnetotelluric) inversion from a
-flat half-space, we start from a "smart" prior model built from gravity +
-MT data, and test whether this speeds up the inversion.
+**One line:** a Julia/Lux.jl neural field that predicts ore grade, density,
+magnetic susceptibility, and (unverified) resistivity on every cell of a 3D
+block model, trained only on sparse geochemistry, lithology, drill assays,
+and petrophysical measurements — no gravity, no MT, no other geophysics as
+input.
 
-Version 0.1.0 · Julia 1.10 · MTGeophysics 0.5.0
-Full tables, ablations, and figures: [`docs/ARA_RAPOR.md`](docs/ARA_RAPOR.md)
+The active line of work is this **non-geophysical prior**. It is trained and
+exported on the **Keivitsa (GTK, Finland)** open dataset as a case study, not
+as a claim that the same weights transfer to other deposits. A new site
+needs the same *kinds* of files (collars, surveys, assays, geochemistry,
+lithology, petrophysics) in the layout `src/KeivitsaIO.jl` already reads.
+
+An earlier gravity + MT pipeline (warm-start prior for VFSA) is still in
+the repo (`examples/compare_prior_2d.jl`, `examples/musgrave_*.jl`) and its
+run directories live under `archive/mt_gravity_tmp_outputs/`. The two
+pipelines share Grid / PriorNet / Train utilities, but not inputs, outputs,
+or the training loop. This pipeline does **not** feed VFSA.
 
 ---
 
-## Summary (TL;DR)
+## Status
 
 | Question | Answer |
 |---|---|
-| Does the prior fit the data faster? | **Yes** — consistently, from the start, in 3/3 seeds |
-| Does the prior match the true model better? | **Partly** — structural correlation improves, absolute amplitude (RMSE) is unclear |
-| Does it work for every geological scenario? | **No** — it can fall behind on steep-dip / resistive-contrast structures |
-| Does the VFSA search reach its target (RMS = 1.0)? | **No** — increasing the budget (400→3000) brought less than half the expected gain; the bottleneck is no longer `max_iter`, it's the RBF parametrization |
-
-This project is not a joint inversion. Gravity is only used to build the
-prior; it does not enter VFSA's own search process (χ²).
+| A value on every cell? | **Yes** — 23,800 cells at 25 m Z, 57,800 at 10 m Z; 0 NaN |
+| High-grade contrast vs assays? | **Close, compressed** — predicted high/background ≈ 5.8× vs assay ≈ 6.7× (25 m grid, best 300-epoch checkpoint) |
+| 3D shape? | **Partly** — plan-view location matches known high-Cu holes; the 5,000 ppm isosurface is fragmented, not a continuous shell |
+| Petrophysics provenance? | **Partial** — density and susceptibility are high-confidence inferences from GTK's combined measurement suite; `LUO_R` resistivity is unverified and must not be treated as calibrated |
+| Connected to VFSA? | **No.** Deferred — see [Relationship to VFSA](#relationship-to-vfsa) |
 
 ---
 
-## What is the project?
+## Data (not in this repository)
+
+Training does not download anything. `examples/train_keivitsa_prior.jl`
+reads a local GTK package:
 
 ```
-Gravity + MT data (Niblett–Bostick) → Lux network → Prior model (μ, σ)
-                                                    → VFSA2DMT (as the starting model)
+KEIVITSA_ROOT  (or, if unset, ~/nisai/minerai-code/database/keivitsa)
+├── config.yaml                          # train.grid_bounds
+├── processed/keivitsa_cleaned_intervals.csv
+└── source/gtk/report/
+    ├── 3_DRILLINGS/Logs/Shape_files/    # collar.dbf, survey.dbf, rocktype.dbf, lithdesc.dbf
+    ├── 3_DRILLINGS/Assays/Shape_files/  # Cu intervals (grade anchors)
+    ├── 3_DRILLINGS/.../petro.txt        # PTR_D/J, DSR_D/J, LUO_R
+    └── 4_GEOCHEMISTRY/*.dbf             # till/bedrock surface chemistry
 ```
 
-Goal: give the prior as the starting point and see whether VFSA's search
-(a) fits the data faster, and (b) produces a result that is closer to the
-true model. The forward solver, perturbation, and cooling schedule do not
-change — only the starting point changes.
+Set `KEIVITSA_ROOT` if the package lives somewhere else. `5_GROUND_GEOPHYSICS`
+is in the GTK tree and is **not** opened. Tiny copies for unit tests only:
+`test/fixtures/`.
+
+`tmp_keivitsa_prior*/` directories are **outputs** (checkpoints, VTK, PNGs),
+not the source data.
 
 ---
 
-## Main Findings
+## Input
 
-### 1) The prior fits the data faster
+Three data families. No gravity, no MT.
 
-Across 3 different seeds, VFSA's data fit (data RMS) after 400 iterations:
+| # | Channel group | Source | Count (Keivitsa) | Role |
+|---|---|---|---:|---|
+| 1 | Position | grid centres | — | x, y, z → Fourier encoding (`n_bands=4`) |
+| 2 | Geochemistry (surface) | `4_GEOCHEMISTRY/*.dbf` | 971 | Cu, Ni, Co, Pd, Au + Ni/Cu, Pd/Ni, Co/Ni |
+| 3 | Geochemistry (drill, supplementary) | `processed/keivitsa_cleaned_intervals.csv` | 16,215 | S, Fe, Cr, Pt — elements missing from the surface survey |
+| 4 | Lithology | `rocktype.dbf` / `lithdesc.dbf` | 3,724 | ROCKTYPE, one-hot |
+| 5 | Coverage | derived | — | Distance to nearest geochemistry/lithology sample |
 
-| Seed | Half-space | Prior | Improvement |
-|---|---:|---:|---:|
-| t1 | 4.60 | 3.47 | 25% |
-| t2 | 5.02 | 3.64 | 27% |
-| t3 | 5.15 | 3.82 | 26% |
+Where surface and drillhole geochemistry overlap on the same element, the
+**surface sample wins**. Drill Cu is the grade *target* (anchor), not a
+feature.
 
-Most of this difference comes from the starting point: from iteration one,
-the prior already has much lower error than the half-space (~4.6 vs ~30).
-
-**Example (t1): convergence and data fit, half-space vs prior**
-
-| Half-space | Prior |
-|---|---|
-| ![t1 half convergence](docs/assets/t1_convergence_half.png) | ![t1 prior convergence](docs/assets/t1_convergence_prior.png) |
-| ![t1 half data fit](docs/assets/t1_data_fit_half.png) | ![t1 prior data fit](docs/assets/t1_data_fit_prior.png) |
-
-### 2) Match with the true model: structure yes, amplitude unclear
-
-| Metric | Result |
-|---|---|
-| Correlation (with true model) | Prior is higher in 3/3 seeds (e.g. 0.30 vs 0.21) |
-| RMSE (with true model) | Inconsistent — prior is better in some seeds, not in others |
-
-Interpretation: the prior captures the *structure* (where conductive /
-resistive zones are) more accurately, but there is no guaranteed gain in
-absolute resistivity values.
-
-**Example (t1): mean model after inversion, compared to the true model**
-
-| Half-space | Prior |
-|---|---|
-| ![t1 half model mean](docs/assets/t1_model_mean_half.png) | ![t1 prior model mean](docs/assets/t1_model_mean_prior.png) |
-
-### 3) It doesn't work for every geology
-
-Across 4 different synthetic geology scenarios (no VFSA, direct prior vs NB
-comparison): the prior is clearly better for shallow/medium-dip conductive
-structures, but falls behind for steep-dip or resistive-contrast structures.
-
-**For full tables, ablation results, sigma/uncertainty analysis, and
-Musgrave (real data) results, see:** [`docs/ARA_RAPOR.md`](docs/ARA_RAPOR.md)
+Encoded feature width on the Keivitsa grid is 54 (30 named channels after
+Fourier bands on coordinates).
 
 ---
 
-## Conclusion: Not a VFSA Budget Problem — a Parametrization Bottleneck
+## Architecture
 
-The results above were obtained with `max_iter=400`. The target data fit
-(`target_rms=1.0`) — current results stay above this. To address it, we
-tested increasing the budget in steps: 400 → 800 → 3000 iterations.
+```
+[position, geochemistry, lithology, coverage]  (30 named channels → 54 after encoding)
+                    │
+          Fourier positional encoding (coordinates only)
+                    │
+              PriorNet (Lux.jl MLP, gelu)
+         default width = 128, depth = 4
+         capacity experiment used width = 256
+                    │
+        ┌───────────┼───────────┬──────────────┐
+   mu_grade    mu_density  mu_susceptibility  mu_resistivity
+   sigma_grade sigma_density sigma_susceptibility sigma_resistivity
+```
 
-**Effect of budget on t1 (best chain, final RMS):**
+Eight outputs (`Dense(width => 8)`): four properties, each with a mean (`μ`)
+and a heteroscedastic uncertainty (`σ`). Default CLI width is **128**;
+`width=256` was a capacity run, not the script default.
 
-| budget | prior | half-space |
+**Per cell:**
+- `μ` — point estimate written into the block model (`μ_grade` is Cu_Log;
+  exported `grade` is `10^μ_grade` in ppm).
+- `σ` — learned cell-wise uncertainty via heteroscedastic NLL in
+  `src/Losses.jl`. After the data-driven floor (`σ ≥ 1 ×` group std of the
+  anchors), most anchors sit on that floor, so `σ` currently carries little
+  cell-to-cell information.
+
+Resistivity is **still trained** (fourth head, loss weight 1). It is not
+removed from the graph. It is flagged unverified (`KEIVITSA_PETRO_STATUS.LUO_R`)
+and must not be used as a physical property or a VFSA starting model.
+
+---
+
+## Output — anchors and confidence
+
+Supervision is only at anchor cells. The rest of the grid is filled by the
+learned geochemistry/lithology → property map. There is no kriging-style
+spatial continuity prior: distant cells can get similar predictions if their
+features match.
+
+| Property | Anchor source | Cells (25 m) | Cells (10 m Z) | Confidence |
+|---|---|---:|---:|---|
+| `grade` (Cu_Log) | Drill assays | 988 | 1,969 | Direct measurement |
+| `density` | `PTR_D` + `DSR_D` | 936 | 1,862 | High-confidence inference |
+| `susceptibility` | `PTR_J` + `DSR_J` | 936 | 1,862 | High-confidence inference |
+| `resistivity` | `LUO_R` | 524 | 1,077 | **Unverified — trained, not trusted** |
+
+### Petrophysics provenance
+
+`petro.txt` has no column dictionary in the GTK report package. GTK's
+published combined density–susceptibility–remanence measurement (Puranen;
+national database ~130,000 samples) is strong circumstantial support for:
+
+- `PTR_D` / `DSR_D` → density (kg/m³; NLL uses g/cm³)
+- `PTR_J` / `DSR_J` → magnetic susceptibility
+- `PTR_K` / `DSR_K` → likely remanence — **parsed, not used** (candidate 5th
+  property)
+
+`LUO_R` (range ~0.11–1.2×10⁶, consistent with Ω·m) has **no** supporting
+source. It is read and trained; do not treat `μ_resistivity` as calibrated.
+
+---
+
+## Relationship to VFSA
+
+Not connected. VFSA2D in this package accepts a log-resistivity starting
+grid only. That is the unverified head. Grade / density / susceptibility
+would need a petrophysical translation before they could warm-start MT
+inversion. Explicitly deferred.
+
+---
+
+## Key experiments
+
+Same 971 + 16,215-point geochemistry input unless noted. Grid: 50×34×N,
+25 m in X/Y, EPSG:2393 (KKJ Finland Zone 3). Numbers below are from the
+run directories `tmp_keivitsa_prior*` (gitignored diagnostic outputs).
+
+### 1) Training budget (epochs)
+
+25 m Z, width 128, depth 4, resistivity included, **no** σ floor.
+
+| | 30 epoch (`tmp_keivitsa_prior`) | 300 epoch, best = 250 (`tmp_keivitsa_prior_e300`) |
 |---|---:|---:|
-| 400 | 3.47 | 4.60 |
-| 800 | 2.90 | 3.87 |
-| 3000 | **2.64** | **3.50** |
+| log10-RMSE (988 grade anchors) | 0.460 | **0.249** |
+| High-grade pred/background | 2.65× | **5.81×** |
+| Assay high/background (reference) | 6.72× | 6.72× |
+| Max predicted Cu (ppm) | 3,831 | 16,751 |
+| Cells ≥ 5,000 ppm | 0 | 621 |
 
-**The conclusion is now clear:**
+More training closed most of the amplitude-compression gap. Loss ticked
+back up between epoch 250 and 300 (density NLL 0.191 → 0.314);
+`train_prior` keeps the best checkpoint.
 
-- **The original 400-iteration diagnosis was correct** — that was not a
-  "plateau," it was a short budget.
-- **But 3000 isn't enough either.** Going from 800 to 3000 used 5.5× more
-  iterations, but delivered less than half of the hoped-for gain. In the
-  last 200 iterations the slope is ~−0.0003/iter, acceptance rate 4–9% —
-  the search has almost stopped in the cold regime. The remaining gap
-  (~1.6 RMS) no longer closes with more iterations.
-- **The likely cause is the RBF parametrization.** 250 control points and a
-  ~800–1000 m kernel width may not be enough to represent the noisy (5%)
-  2D data down to RMS=1.0. `step_scale` was not the bottleneck.
-- **This is not the prior "locking" the search.** The prior consistently
-  fits the data better than the half-space (2.64 vs 3.50) — this is a real
-  advantage from the starting point, not a search artifact. The half-space
-  gets closer with more budget, but does not overtake it.
-- **True-model RMSE remains a separate question.** VFSA fits the noisy
-  data; a lower data RMS does not automatically mean the result is closer
-  to the true model (see the "match with the true model" finding above).
+### 2) Z-axis grid resolution
 
-**Practical takeaway:** the 400-iteration table above comes from a
-start-dependent, not-fully-converged search — but this does not invalidate
-the finding that the prior speeds up data fitting. If RMS=1.0 is the goal,
-the next lever is not `max_iter`; it's increasing `n_ctrl`, using a
-narrower RBF kernel, or a different parametrization.
+Hypothesis: 10 m Z instead of 25 m would connect the fragmented isosurface.
+
+| | 25 m Z, ep. 250 (`e300` checkpoint) | 10 m Z, ep. 250 (`tmp_keivitsa_prior_z10`) |
+|---|---:|---:|
+| Cells | 23,800 | 57,800 |
+| log10-RMSE | 0.249 | 0.291 |
+| High-grade pred/bg | 5.81× | 5.86× |
+| Fragmented 5,000 ppm shell? | Yes | **Still yes** |
+
+**Hypothesis rejected.** Finer Z did not connect the fragments and did not
+improve RMSE.
+
+### 3) Sigma floor
+
+Without a floor, density `σ` collapsed below the group std and NLL went
+negative. Current training code floors `σ ≥ 1 ×` group std per property
+(`sigma_bounds_from_anchors` in `examples/train_keivitsa_prior.jl`).
+
+| | No floor (e300, best ep. 250) | With floor (`tmp_keivitsa_prior_sigmafloor`, best ep. 200) |
+|---|---:|---:|
+| Total NLL | −5.12 | **+0.66** |
+| Anchors sitting at the floor | — | 87–100% across properties |
+
+Fixes the negative-NLL artifact. `σ` then loses most cell-to-cell range.
+
+> Value share is not gradient share. Tables above are loss *values*, not
+> which term is driving updates.
+
+### 4) Network capacity
+
+25 m Z, 250 epoch, σ floor on.
+
+| width | depth | log10-RMSE | pred/bg | wall | run dir |
+|---:|---:|---:|---:|---:|---|
+| 128 | 4 | 0.287 | 5.55× | — | `tmp_keivitsa_prior_sigmafloor` |
+| **256** | 4 | **0.232** | 5.78× | 395 s | `tmp_keivitsa_prior_wide` |
+| 128 | 6 | 0.281 | 5.72× | 312 s | `tmp_keivitsa_prior_deep` |
+
+Width helped RMSE; it did **not** move high-grade contrast (~5.5–5.8× vs
+assay 6.72×). Default `SMARTPRIOR_WIDTH` is still 128.
 
 ---
 
-## Next Steps
+## Visual results
 
-1. Tune the RBF parametrization: increase `n_ctrl` and/or use a narrower
-   kernel (smaller `rbf_sigma_scale`) — single-seed probe on t1
-2. If the probe gets closer to RMS=1.0, re-run the full 3-seed validation
-   with the new parametrization
-3. `max_iter` is no longer the lever — the budget can stay fixed at 400,
-   and the freed-up time can go into this parametrization search instead
-
----
-
-## Installation and Quick Start
-
-```julia
-using Pkg
-Pkg.activate(".")
-Pkg.instantiate()
-```
+Figures are **not** written during training. After a checkpoint exists:
 
 ```bash
-julia --project=. examples/compare_prior_2d.jl
+julia --project=. examples/export_keivitsa_blockmodel.jl
 ```
 
-Runs a half-space vs prior comparison on a synthetic dipping conductive
-slab (same seed, same VFSA settings). For other example commands
-(ablation, blind protocol, geology sweep), see
-[`docs/ARA_RAPOR.md`](docs/ARA_RAPOR.md).
+That script (1) rebuilds the same feature stack, (2) predicts `μ` /
+`grade_ppm = 10^μ_grade` on the full grid, (3) writes a VTK StructuredGrid,
+(4) a 2D column-max plan (Plots.jl), and (5) 3D marching-cubes isosurfaces
+via PyVista (`render_orebody_pyvista`: Gaussian blur σ = 0.25, Taubin
+smooth, gold palette, isometric camera, optional NISAI drill traces).
 
-| Package | Compat |
-|---|---|
-| ArchGDAL | 0.10.12 |
-| ComponentArrays | 0.15.47 |
-| ForwardDiff | 1.4.5 |
-| Interpolations | 0.15.1 |
-| JLD2 | 0.6.6 |
-| Lux | 1.31.4 |
-| MTGeophysics | 0.5.0 |
-| Optimisers | 0.4.9 |
-| Plots | 1.41.7 |
-| Zygote | 0.7.12 |
-| julia | 1.10 |
+### Plan view (column-max μ_grade — location/contour only)
+
+30 epoch, 25 m. Contours at 2,000 / 3,000 ppm; 5,000 ppm was empty at this
+budget. Diamonds = high-Cu holes.
+
+![Plan view, 30 epoch](docs/assets/plan_view_30epoch.png)
+
+300 epoch (best checkpoint 250), 25 m — tighter around known high-Cu holes;
+5,000 ppm contour is non-empty (621 cells).
+
+![Plan view, 300 epoch](docs/assets/plan_view_300epoch.png)
+
+### 3D isosurface
+
+SmartPrior, 25 m XY / 10 m Z, 250 epoch, Cu ≥ 5,000 ppm (1,038 cells).
+PyVista isometric view, drill traces overlaid. This is a screenshot of the
+predicted grade field, not an inversion.
+
+![SmartPrior, Z=10 m, 5000 ppm](docs/assets/iso_z10_5000ppm.png)
+
+Same 300-epoch / 25 m-Z checkpoint at 3,000 ppm and 5,000 ppm:
+
+![SmartPrior, 300 epoch, 3000 ppm](docs/assets/iso_300epoch_3000ppm.png)
+
+![SmartPrior, 300 epoch, 5000 ppm](docs/assets/iso_300epoch_5000ppm.png)
 
 ---
 
-## Known Limitations (brief)
+## How to run
 
-- **Single-lithology assumption:** a single gravity–resistivity slope is
-  used; reliability drops in mixed-lithology settings (e.g. Musgrave).
-- **TE-only:** TM mode exists, but station-wise error calibration is not
-  implemented yet.
-- **`σ` is not a calibrated uncertainty map** — and it does not enter the
-  inversion either.
-- **Partial inverse crime:** present in the gravity operator (the same
-  forward model is used for both synthetic data generation and inversion),
-  not present on the petrophysics or MT side.
-- **3D warm-start is out of scope** — the upstream package (`MTGeophysics`)
-  does not support cell-wise bounds.
-- **The VFSA budget still doesn't reach the target** (details above).
+Julia 1.10+, from the repo root:
 
-Full list and rationale: [`docs/ARA_RAPOR.md`](docs/ARA_RAPOR.md)
+```bash
+julia --project=. -e 'using Pkg; Pkg.instantiate()'
+julia --project=. examples/train_keivitsa_prior.jl
+julia --project=. examples/export_keivitsa_blockmodel.jl
+```
+
+Useful environment variables (both scripts):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `KEIVITSA_ROOT` | `~/nisai/minerai-code/database/keivitsa` | GTK package root |
+| `SMARTPRIOR_WORK` | `tmp_keivitsa_prior/` | checkpoint + export directory |
+| `SMARTPRIOR_CELL_M` | 25 | XY cell size (m) |
+| `SMARTPRIOR_CELL_Z` | same as XY | vertical cell size (m) |
+| `SMARTPRIOR_EPOCHS` | 100 | training budget (reported runs used 250–300) |
+| `SMARTPRIOR_WIDTH` | 128 | MLP width |
+| `SMARTPRIOR_DEPTH` | 4 | MLP depth |
+| `SMARTPRIOR_TAG` | `""` | export filename suffix (`_z10`, `_e300`, …) |
+| `SMARTPRIOR_PYTHON` | auto | PyVista interpreter for 3D PNGs |
+
+Outputs in `SMARTPRIOR_WORK`: `keivitsa_prior.jld2`,
+`keivitsa_smartprior_blockmodel*.vts` (hand-written VTK, no WriteVTK.jl),
+plan/isosurface PNGs (3D PNGs need PyVista), `keivitsa_prior_report.txt`.
+
+Tests: `julia --project=. -e 'using Pkg; Pkg.test()'`.
+
+---
+
+## Repository layout
+
+| Path | Role |
+|---|---|
+| `src/KeivitsaIO.jl` | GTK readers (this pipeline) |
+| `src/{Grid,Features,PriorNet,Losses,Train}.jl` | shared neural-field stack |
+| `examples/train_keivitsa_prior.jl` | train |
+| `examples/export_keivitsa_blockmodel.jl` | VTK + figures |
+| `tmp_keivitsa_prior*/` | current diagnostic runs (gitignored) |
+| `archive/mt_gravity_tmp_outputs/` | archived gravity+MT / Musgrave runs |
+| `examples/compare_prior_2d.jl`, `examples/musgrave_*.jl` | legacy gravity+MT examples |
+
+---
+
+## Data licensing note
+
+Keivitsa originates from GTK's open data release. A parallel look at
+Ontario Geological Survey drillhole / specific-gravity / susceptibility
+databases found them downloadable, but Ontario's Terms of Use restrict
+**"substantial reproduction"** without prior written permission. Do not
+assume that data is open-for-training.
+
+---
+
+## Open questions
+
+1. **High-grade contrast** does not move with network capacity. Not yet
+   diagnosed (feature ceiling vs mean-NLL under-weighting rare highs vs
+   only 60 of 988 anchors ≥ 5,000 ppm).
+2. **No gradient-level loss decomposition** in this pipeline — pay tables
+   are value shares only.
+3. **`PTR_K`/`DSR_K`** (likely remanence) — candidate 5th output.
+4. **`LUO_R` resistivity** — trained, unverified. Needed if VFSA
+   integration returns.
+5. **Isosurface fragmentation** — Z: 25→10 m ruled out; XY resolution,
+   ensemble methods, envelope masking not tested.
 
 ---
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT. See `LICENSE`.

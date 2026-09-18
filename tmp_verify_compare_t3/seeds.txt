@@ -1,4 +1,0 @@
-mt_seed	20260829
-train_seed	4026
-vfsa_seed	6242
-grav_seed	13

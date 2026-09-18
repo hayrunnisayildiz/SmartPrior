@@ -260,6 +260,66 @@ end
     @test_throws ArgumentError coverage_channels(g, [0.0], Float64[])
 end
 
+@testset "nearest-sample geochemistry and lithology channels" begin
+    g = PriorGrid(fill(100.0, 4), fill(100.0, 4), fill(50.0, 3);
+                  origin = [0.0, 0.0, 0.0])
+    nx, ny, nz = size(g)
+
+    # two plan-view samples: left cell should inherit the left value
+    samples = PointSamples([50.0, 350.0], [200.0, 200.0],
+                           [10.0 100.0; 1000.0 10.0],
+                           ["CU", "NI"])
+    gc, gn = geochemistry_channels(g, samples)
+    @test gn == ["geochem_CU", "geochem_NI"]
+    @test all(c -> size(c) == (nx, ny, nz), gc)
+    @test all(c -> all(isfinite, c), gc)
+    # log10 then standardise: left side of CU is the smaller concentration
+    # so after standardise the left column mean is below the right
+    @test mean(gc[1][1, :, :]) < mean(gc[1][4, :, :])
+
+    # missing nickel on the left sample must not paint from the copper-only row
+    sparse = PointSamples([50.0, 350.0], [200.0, 200.0],
+                          [10.0 NaN; 1000.0 5.0],
+                          ["CU", "NI"])
+    sc, sn = nearest_sample_channels(g, sparse; standardize_values = false)
+    @test sn == ["CU", "NI"]
+    @test all(sc[2] .== 5.0)   # only the right sample has Ni, so it wins everywhere
+
+    lith = LabelSamples([50.0, 50.0, 350.0, 350.0, 50.0],
+                        [50.0, 350.0, 50.0, 350.0, 200.0],
+                        ["oliviini", "oliviini", "maata", "maata", "rare_dyke"];
+                        z = [25.0, 25.0, 25.0, 25.0, 25.0])
+    lc, ln = lithology_channels(g, lith; min_frequency = 0.25)
+    @test "lith_OLIVIINI" in ln
+    @test "lith_MAATA" in ln
+    @test "lith_OTHER" in ln          # rare_dyke collapsed
+    @test !("lith_RARE_DYKE" in ln)
+    @test all(c -> size(c) == (nx, ny, nz), lc)
+    # one-hot: each cell's channels sum to 1
+    stacked = reduce((a, b) -> a .+ b, lc)
+    @test all(x -> x ≈ 1.0, stacked)
+
+    # GTK dBase Latin-1 Ä (0xC4) must not throw in the tokenizer
+    latin1_maa = String(UInt8[0x6d, 0x61, 0x61, 0xc4])
+    lith_latin = LabelSamples([50.0, 50.0, 350.0, 350.0, 50.0],
+                              [50.0, 350.0, 50.0, 350.0, 200.0],
+                              ["oliviini", "oliviini", latin1_maa, latin1_maa, "rare_dyke"];
+                              z = [25.0, 25.0, 25.0, 25.0, 25.0])
+    lc_l, ln_l = lithology_channels(g, lith_latin; min_frequency = 0.25)
+    @test "lith_MAA" in ln_l
+    @test "lith_OLIVIINI" in ln_l
+    @test "lith_OTHER" in ln_l
+
+    cc3, cn3 = coverage_channels(g, lith.x, lith.y, lith.z; name = "sample_distance")
+    @test cn3 == ["sample_distance"]
+    @test size(cc3[1]) == (nx, ny, nz)
+    # 3-D coverage varies with depth, unlike the extruded MT channel
+    @test std(cc3[1][2, 2, :]) > 0
+
+    @test_throws ArgumentError PointSamples([0.0], [0.0], zeros(1, 1), ["a", "b"])
+    @test_throws ArgumentError LabelSamples([0.0], [0.0, 1.0], ["a"])
+end
+
 @testset "build_features assembles only what it is given" begin
     g = _test_grid()
     nx, ny, nz = size(g)

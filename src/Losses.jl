@@ -505,7 +505,8 @@ end
 
 """
     LossWeights(; anchor=1.0, gravity=1.0, mt=1.0, smooth=1.0e-2, sigma=1.0e-2,
-                reference=0.0)
+                reference=0.0, grade=1.0, density=1.0, susceptibility=1.0,
+                resistivity=1.0)
 
 Relative weights of the loss terms.
 
@@ -517,6 +518,10 @@ of departure from the baseline must buy 0.1 of data misfit to be worth keeping.
 Zero means the term is reported but does not enter the total. Any residual-mode
 run with a baseline should set it; the value is calibrated per survey by
 watching the terms, not guessed.
+
+`grade`, `density`, `susceptibility` and `resistivity` weight the four named
+anchor groups used by the Keivitsa line. They do not affect the single-property
+`anchor` term.
 """
 Base.@kwdef struct LossWeights
     anchor::Float64 = 1.0
@@ -525,17 +530,35 @@ Base.@kwdef struct LossWeights
     smooth::Float64 = 1.0e-2
     sigma::Float64 = 1.0e-2
     reference::Float64 = 0.0
+    grade::Float64 = 1.0
+    density::Float64 = 1.0
+    susceptibility::Float64 = 1.0
+    resistivity::Float64 = 1.0
 end
+
+const AnchorSet = Tuple{Vector{Int},Vector{Float64},Vector{Float64}}
 
 """
     PriorTargets(; anchors=nothing, gravity=nothing, mt=nothing, reference=nothing,
                  sigma_target=0.5, sigma_drive=nothing, sigma_target_vec=nothing,
-                 phase_weight=1.0, vertical_weight=1.0, reference_weight=nothing)
+                 phase_weight=1.0, vertical_weight=1.0, reference_weight=nothing,
+                 anchors_grade=nothing, anchors_density=nothing,
+                 anchors_susceptibility=nothing, anchors_resistivity=nothing,
+                 property_names=String[])
 
 Everything the loss needs besides the network output.
 
 - `anchors`: `(cells, values, weights)` where `cells` are linear cell indices,
   `values` log10 resistivities to match and `weights` their relative trust.
+  The original single-property group; ignored when the network has several
+  outputs.
+- `anchors_grade`, `anchors_density`, `anchors_susceptibility`,
+  `anchors_resistivity`: the same triple, one independent NLL per Keivitsa
+  property. Each uses its own row of the multi-property `(mu, sigma)` and its
+  own [`LossWeights`](@ref) field. The NLL is scored in units of that group's
+  weighted std and doubled so a one-std residual with `sigma` equal to that
+  std is `1.0` (the χ²/datum convention of [`gravity_misfit`](@ref) /
+  [`mt_column_misfit`](@ref)). Constant-valued groups keep native units.
 - `gravity`: `(A, obs, err)` from [`gravity_matrix`](@ref) and a [`GravityObs`](@ref).
 - `mt`: `(sites, site_cells)` for the 1-D consistency term.
 - `reference`: serves two terms. It is the level gravity anomalies are measured
@@ -559,7 +582,7 @@ survey with gravity but no boreholes, or anchors but no gravity. The damping
 term is skipped entirely when `reference` is `nothing`.
 """
 Base.@kwdef struct PriorTargets
-    anchors::Union{Nothing,Tuple{Vector{Int},Vector{Float64},Vector{Float64}}} = nothing
+    anchors::Union{Nothing,AnchorSet} = nothing
     gravity::Union{Nothing,Tuple{Matrix{Float64},Vector{Float64},Vector{Float64}}} = nothing
     mt::Union{Nothing,Tuple{MTSites,Vector{Tuple{Int,Int}}}} = nothing
     reference::Union{Nothing,Vector{Float64}} = nothing
@@ -570,6 +593,20 @@ Base.@kwdef struct PriorTargets
     phase_weight::Float64 = 1.0
     vertical_weight::Float64 = 1.0
     reference_weight::Union{Nothing,Vector{Float64}} = nothing
+    anchors_grade::Union{Nothing,AnchorSet} = nothing
+    anchors_density::Union{Nothing,AnchorSet} = nothing
+    anchors_susceptibility::Union{Nothing,AnchorSet} = nothing
+    anchors_resistivity::Union{Nothing,AnchorSet} = nothing
+    property_names::Vector{String} = String[]
+end
+
+function _has_named_anchors(t::PriorTargets)
+    return t.anchors_grade !== nothing || t.anchors_density !== nothing ||
+           t.anchors_susceptibility !== nothing || t.anchors_resistivity !== nothing
+end
+
+function _has_any_anchors(t::PriorTargets)
+    return t.anchors !== nothing || _has_named_anchors(t)
 end
 
 """
@@ -577,7 +614,8 @@ end
 
 Total training objective. See [`loss_report`](@ref) for the term-by-term split.
 
-`mu` and `sigma` are flat vectors over cells in `vec` order.
+`mu` and `sigma` are flat vectors over cells in `vec` order, or
+`[nproperties, ncell]` matrices for a multi-property net.
 """
 function prior_loss(mu::AbstractVector, sigma::AbstractVector,
                     coupling::GravityCoupling,
@@ -585,6 +623,14 @@ function prior_loss(mu::AbstractVector, sigma::AbstractVector,
                     targets::PriorTargets,
                     weights::LossWeights = LossWeights())
     return first(_loss_terms(mu, sigma, coupling, grid, targets, weights))
+end
+
+function prior_loss(mus::AbstractMatrix, sigmas::AbstractMatrix,
+                    coupling::GravityCoupling,
+                    grid::PriorGrid,
+                    targets::PriorTargets,
+                    weights::LossWeights = LossWeights())
+    return first(_loss_terms(mus, sigmas, coupling, grid, targets, weights))
 end
 
 """
@@ -602,6 +648,95 @@ function loss_report(mu::AbstractVector, sigma::AbstractVector,
     return (total = total, terms...)
 end
 
+function loss_report(mus::AbstractMatrix, sigmas::AbstractMatrix,
+                     coupling::GravityCoupling,
+                     grid::PriorGrid,
+                     targets::PriorTargets,
+                     weights::LossWeights = LossWeights())
+    total, terms = _loss_terms(mus, sigmas, coupling, grid, targets, weights)
+    return (total = total, terms...)
+end
+
+function _nll_anchors(mu::AbstractVector, sigma::AbstractVector, anchors, n::Int)
+    cells, values, w = anchors
+    all(c -> 1 <= c <= n, cells) || throw(ArgumentError(
+        "prior_loss: anchor cell indices must lie in 1:$(n)"))
+    return heteroscedastic_nll(mu[cells], sigma[cells], values; weight = w)
+end
+
+# Weighted std of an anchor group. A constant-valued group has no scale, in
+# which case the caller leaves the NLL in native units (`scale = 1`).
+function _anchor_scale(values::AbstractVector{<:Real},
+                       weight::AbstractVector{<:Real})
+    n = length(values)
+    n == 0 && return 1.0
+    sw = 0.0
+    macc = 0.0
+    @inbounds for i in 1:n
+        wi = Float64(weight[i])
+        sw += wi
+        macc += wi * Float64(values[i])
+    end
+    sw <= 0 && return 1.0
+    m = macc / sw
+    vacc = 0.0
+    @inbounds for i in 1:n
+        vacc += Float64(weight[i]) * abs2(Float64(values[i]) - m)
+    end
+    s = sqrt(vacc / sw)
+    return s > 1e-12 ? s : 1.0
+end
+
+"""
+    sigma_bounds_from_anchors(anchors; fraction=1.0, hi=1.2) -> (lo, hi)
+
+Hard squash interval for one property's σ.
+
+The calibrated NLL contains `2 log(σ / s)` where `s` is the group's weighted
+std. If σ is allowed below `s`, that term goes negative and looks like a
+reward for overconfidence. The lower edge is therefore `fraction * s`
+(default `fraction = 1`, so σ cannot undercut the observation scale). A
+10–20 % fraction would sit *below* the historical global floor of 0.05 for
+a narrow group such as density (`s ≈ 0.1`) and would make the failure worse.
+
+The upper edge is at least `hi` and at least `2 s`, so a wide group
+(resistivity, several log10 decades) still has room above its scatter.
+"""
+function sigma_bounds_from_anchors(anchors; fraction::Real = 1.0, hi::Real = 1.2)
+    0 < fraction || throw(ArgumentError(
+        "sigma_bounds_from_anchors: fraction must be positive"))
+    hi > 0 || throw(ArgumentError("sigma_bounds_from_anchors: hi must be positive"))
+    _, values, w = anchors
+    s = _anchor_scale(values, w)
+    lo = Float64(fraction) * s
+    cap = max(Float64(hi), 2 * s)
+    lo < cap || throw(ArgumentError(
+        "sigma_bounds_from_anchors: lo $(lo) is not below hi $(cap) (s=$(s))"))
+    return (lo, cap)
+end
+
+"""
+    _calibrated_nll(mu, sigma, anchors, n) -> Real
+
+[`heteroscedastic_nll`](@ref) scored in units of the group's own weighted std,
+then doubled so a one-std residual with `sigma` equal to that std is `1.0`.
+
+This is the named-anchor analogue of `mt_column_misfit`'s
+`total / (ns * (1 + phase_weight))` and of [`gravity_misfit`](@ref) being
+χ²/datum: equal [`LossWeights`](@ref) then mean equal pull, instead of density
+(narrow g/cm³) cancelling resistivity (several log10 decades) in the total.
+
+`2 * (nll - log(s))` equals `mean(((t-μ)/σ)^2 + 2 log(σ/s))`. `s` is data, not
+a network output, so the shift does not leak into the gradient of `μ` or `σ`
+beyond the intended rescaling of `log(σ)`.
+"""
+function _calibrated_nll(mu::AbstractVector, sigma::AbstractVector, anchors, n::Int)
+    raw = _nll_anchors(mu, sigma, anchors, n)
+    _, values, w = anchors
+    s = _anchor_scale(values, w)
+    return 2 * (raw - log(s))
+end
+
 function _loss_terms(mu::AbstractVector, sigma::AbstractVector,
                      coupling::GravityCoupling,
                      grid::PriorGrid,
@@ -612,12 +747,18 @@ function _loss_terms(mu::AbstractVector, sigma::AbstractVector,
         "prior_loss: mu has $(length(mu)) entries but the grid has $(n) cells"))
     length(sigma) == n || throw(DimensionMismatch(
         "prior_loss: sigma has $(length(sigma)) entries but the grid has $(n) cells"))
+    _has_named_anchors(targets) && throw(ArgumentError(
+        "prior_loss: named anchor groups need a multi-property (matrix) mu/sigma"))
 
     total = zero(eltype(mu)) + 0.0
     anchor_term = NaN
     gravity_term = NaN
     mt_term = NaN
     reference_term = NaN
+    grade_term = NaN
+    density_term = NaN
+    susc_term = NaN
+    res_term = NaN
 
     if targets.reference !== nothing
         length(targets.reference) == n || throw(DimensionMismatch(
@@ -625,10 +766,7 @@ function _loss_terms(mu::AbstractVector, sigma::AbstractVector,
     end
 
     if targets.anchors !== nothing
-        cells, values, w = targets.anchors
-        all(c -> 1 <= c <= n, cells) || throw(ArgumentError(
-            "prior_loss: anchor cell indices must lie in 1:$(n)"))
-        anchor_term = heteroscedastic_nll(mu[cells], sigma[cells], values; weight = w)
+        anchor_term = _nll_anchors(mu, sigma, targets.anchors, n)
         total += weights.anchor * anchor_term
     end
 
@@ -665,5 +803,101 @@ function _loss_terms(mu::AbstractVector, sigma::AbstractVector,
     end
 
     return total, (anchor = anchor_term, gravity = gravity_term, mt = mt_term,
-                   smooth = smooth_term, sigma = sigma_term, reference = reference_term)
+                   smooth = smooth_term, sigma = sigma_term, reference = reference_term,
+                   grade = grade_term, density = density_term,
+                   susceptibility = susc_term, resistivity = res_term)
+end
+
+function _property_row(names::Vector{String}, name::AbstractString, nprop::Int)
+    k = findfirst(==(name), names)
+    k === nothing && throw(ArgumentError(
+        "prior_loss: no row named $(name) in property_names $(names)"))
+    1 <= k <= nprop || throw(ArgumentError(
+        "prior_loss: property $(name) maps to row $k but mu has $nprop rows"))
+    return k
+end
+
+function _loss_terms(mus::AbstractMatrix, sigmas::AbstractMatrix,
+                     coupling::GravityCoupling,
+                     grid::PriorGrid,
+                     targets::PriorTargets,
+                     weights::LossWeights)
+    n = ncells(grid)
+    nprop = size(mus, 1)
+    size(mus, 2) == n || throw(DimensionMismatch(
+        "prior_loss: mu has $(size(mus, 2)) cells but the grid has $(n)"))
+    size(sigmas) == size(mus) || throw(DimensionMismatch(
+        "prior_loss: sigma size $(size(sigmas)) does not match mu $(size(mus))"))
+    targets.gravity === nothing || throw(ArgumentError(
+        "prior_loss: gravity is not defined on a multi-property mu"))
+    targets.mt === nothing || throw(ArgumentError(
+        "prior_loss: the MT term is not defined on a multi-property mu"))
+
+    names = isempty(targets.property_names) ?
+        (nprop == 4 ? copy(DEFAULT_MULTI_PROPERTIES) : ["prop$i" for i in 1:nprop]) :
+        targets.property_names
+    length(names) == nprop || throw(ArgumentError(
+        "prior_loss: property_names has $(length(names)) entries, mu has $nprop rows"))
+
+    total = zero(eltype(mus)) + 0.0
+    dims = size(grid)
+
+    groups = (
+        (targets.anchors_grade, weights.grade, "grade"),
+        (targets.anchors_density, weights.density, "density"),
+        (targets.anchors_susceptibility, weights.susceptibility, "susceptibility"),
+        (targets.anchors_resistivity, weights.resistivity, "resistivity"),
+    )
+    grade_term = density_term = susc_term = res_term = NaN
+    for (anchors, w, pname) in groups
+        anchors === nothing && continue
+        row = _property_row(names, pname, nprop)
+        term = _calibrated_nll(mus[row, :], sigmas[row, :], anchors, n)
+        total += w * term
+        if pname == "grade"
+            grade_term = term
+        elseif pname == "density"
+            density_term = term
+        elseif pname == "susceptibility"
+            susc_term = term
+        else
+            res_term = term
+        end
+    end
+
+    if targets.anchors !== nothing
+        # legacy single group, applied to the first property (resistivity when
+        # names follow the Keivitsa order and resistivity is last — so only if
+        # the caller really meant property 1). Prefer the named groups.
+        throw(ArgumentError(
+            "prior_loss: use anchors_grade/density/susceptibility/resistivity " *
+            "with a multi-property mu, not the legacy `anchors` field"))
+    end
+
+    smooth_acc = zero(eltype(mus)) + 0.0
+    for p in 1:nprop
+        smooth_acc += smoothness(reshape(mus[p, :], dims), grid;
+                                 vertical_weight = targets.vertical_weight)
+    end
+    smooth_term = smooth_acc / nprop
+    total += weights.smooth * smooth_term
+
+    effective_sigma_target = targets.sigma_target_vec !== nothing ?
+        targets.sigma_target_vec : targets.sigma_target
+    sigma_acc = zero(eltype(sigmas)) + 0.0
+    for p in 1:nprop
+        sigma_acc += sigma_penalty(sigmas[p, :]; target = effective_sigma_target)
+    end
+    sigma_term = sigma_acc / nprop
+    total += weights.sigma * sigma_term
+
+    reference_term = NaN
+    if targets.reference !== nothing
+        # damping is a resistivity-prior idea; skip rather than guess a row
+    end
+
+    return total, (anchor = NaN, gravity = NaN, mt = NaN,
+                   smooth = smooth_term, sigma = sigma_term, reference = reference_term,
+                   grade = grade_term, density = density_term,
+                   susceptibility = susc_term, resistivity = res_term)
 end

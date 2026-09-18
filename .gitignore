@@ -14,6 +14,14 @@ data/raw/
 data_aust/
 
 # diagnostic run directories and large binary dumps (not vendored)
+archive/
+tmp_verify*/
+tmp_keivitsa_prior/
+tmp_keivitsa_prior_e300/
+tmp_keivitsa_prior_z10/
+tmp_keivitsa_prior_sigmafloor/
+tmp_keivitsa_prior_wide/
+tmp_keivitsa_prior_deep/
 tmp_musgrave/
 tmp_musgrave_coarse/
 tmp_musgrave_smooth50/

@@ -391,6 +391,7 @@ end
     @test loaded.nin == net.nin
     @test loaded.log_rho_bounds == (0.5, 4.0)
     @test loaded.sigma_bounds == (0.03, 0.9)
+    @test loaded.sigma_bounds_per == net.sigma_bounds_per
     @test loaded.residual_span ≈ 1.25
     @test loaded.meta["width"] == 8
     @test length(loaded.history) == length(res.history)
@@ -489,4 +490,36 @@ end
         train_prior(net, X, g, targets_old; config = cfg, offset = reference)
     end
     @test !haskey(res_old.history[end], :sigma_target_mean)
+end
+
+@testset "train_prior fits four named anchor groups" begin
+    g = PriorGrid(fill(500.0, 4), fill(500.0, 4), [100.0, 150.0];
+                  origin = [-1000.0, -1000.0, 0.0])
+    n = ncells(g)
+    s = build_features(g)
+    X = encode_features(s; n_bands = 2)
+    names = ["grade", "density", "susceptibility", "resistivity"]
+    cells = collect(1:min(20, n))
+    targets = PriorTargets(
+        anchors_grade = (cells, fill(1.0, length(cells)), ones(length(cells))),
+        anchors_density = (cells, fill(2.5, length(cells)), ones(length(cells))),
+        anchors_susceptibility = (cells, fill(1.5, length(cells)), ones(length(cells))),
+        anchors_resistivity = (cells, fill(2.0, length(cells)), ones(length(cells))),
+        property_names = names,
+        sigma_target = 0.5,
+    )
+    net = PriorNet(size(X, 1); width = 32, depth = 3, nproperties = 4,
+                   property_names = names,
+                   mu_bounds = [(0.0, 3.0), (1.5, 3.5), (0.0, 3.0), (0.0, 4.0)],
+                   sigma_bounds = (0.05, 1.2))
+    res = train_prior(net, X, g, targets;
+                      config = TrainConfig(epochs = 200, learning_rate = 5.0e-3,
+                                           log_every = 50, verbose = false, seed = 8,
+                                           weights = LossWeights(smooth = 1.0e-4, sigma = 1.0e-3)))
+    @test res.best_loss < res.history[1].total
+    @test isfinite(res.history[1].grade)
+    (mus, sigmas), _ = predict(net, X, res.params.net, res.state)
+    @test size(mus) == (4, n)
+    @test mean(abs.(mus[1, cells] .- 1.0)) < 0.4
+    @test mean(abs.(mus[2, cells] .- 2.5)) < 0.4
 end
