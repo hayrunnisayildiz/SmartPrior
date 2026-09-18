@@ -506,7 +506,7 @@ end
 """
     LossWeights(; anchor=1.0, gravity=1.0, mt=1.0, smooth=1.0e-2, sigma=1.0e-2,
                 reference=0.0, grade=1.0, density=1.0, susceptibility=1.0,
-                resistivity=1.0)
+                resistivity=1.0, conductivity=1.0)
 
 Relative weights of the loss terms.
 
@@ -520,8 +520,9 @@ run with a baseline should set it; the value is calibrated per survey by
 watching the terms, not guessed.
 
 `grade`, `density`, `susceptibility` and `resistivity` weight the four named
-anchor groups used by the Keivitsa line. They do not affect the single-property
-`anchor` term.
+anchor groups used by the Keivitsa line. `conductivity` weights the Cloncurry
+fourth head (`conductivity_100kHz`); it does not apply to Keivitsa
+`resistivity`. They do not affect the single-property `anchor` term.
 """
 Base.@kwdef struct LossWeights
     anchor::Float64 = 1.0
@@ -534,6 +535,7 @@ Base.@kwdef struct LossWeights
     density::Float64 = 1.0
     susceptibility::Float64 = 1.0
     resistivity::Float64 = 1.0
+    conductivity::Float64 = 1.0
 end
 
 const AnchorSet = Tuple{Vector{Int},Vector{Float64},Vector{Float64}}
@@ -544,7 +546,7 @@ const AnchorSet = Tuple{Vector{Int},Vector{Float64},Vector{Float64}}
                  phase_weight=1.0, vertical_weight=1.0, reference_weight=nothing,
                  anchors_grade=nothing, anchors_density=nothing,
                  anchors_susceptibility=nothing, anchors_resistivity=nothing,
-                 property_names=String[])
+                 anchors_conductivity=nothing, property_names=String[])
 
 Everything the loss needs besides the network output.
 
@@ -553,12 +555,16 @@ Everything the loss needs besides the network output.
   The original single-property group; ignored when the network has several
   outputs.
 - `anchors_grade`, `anchors_density`, `anchors_susceptibility`,
-  `anchors_resistivity`: the same triple, one independent NLL per Keivitsa
-  property. Each uses its own row of the multi-property `(mu, sigma)` and its
-  own [`LossWeights`](@ref) field. The NLL is scored in units of that group's
-  weighted std and doubled so a one-std residual with `sigma` equal to that
-  std is `1.0` (the χ²/datum convention of [`gravity_misfit`](@ref) /
-  [`mt_column_misfit`](@ref)). Constant-valued groups keep native units.
+  `anchors_resistivity`, `anchors_conductivity`: the same triple, one
+  independent NLL per named property. Each uses its own row of the
+  multi-property `(mu, sigma)` and its own [`LossWeights`](@ref) field.
+  `anchors_resistivity` is the Keivitsa fourth head; `anchors_conductivity`
+  is the Cloncurry fourth head (`conductivity_100kHz`, KT-20 100 kHz
+  specimen conductivity — not MT bulk resistivity). The NLL is scored in
+  units of that group's weighted std and doubled so a one-std residual with
+  `sigma` equal to that std is `1.0` (the χ²/datum convention of
+  [`gravity_misfit`](@ref) / [`mt_column_misfit`](@ref)). Constant-valued
+  groups keep native units.
 - `gravity`: `(A, obs, err)` from [`gravity_matrix`](@ref) and a [`GravityObs`](@ref).
 - `mt`: `(sites, site_cells)` for the 1-D consistency term.
 - `reference`: serves two terms. It is the level gravity anomalies are measured
@@ -597,12 +603,14 @@ Base.@kwdef struct PriorTargets
     anchors_density::Union{Nothing,AnchorSet} = nothing
     anchors_susceptibility::Union{Nothing,AnchorSet} = nothing
     anchors_resistivity::Union{Nothing,AnchorSet} = nothing
+    anchors_conductivity::Union{Nothing,AnchorSet} = nothing
     property_names::Vector{String} = String[]
 end
 
 function _has_named_anchors(t::PriorTargets)
     return t.anchors_grade !== nothing || t.anchors_density !== nothing ||
-           t.anchors_susceptibility !== nothing || t.anchors_resistivity !== nothing
+           t.anchors_susceptibility !== nothing || t.anchors_resistivity !== nothing ||
+           t.anchors_conductivity !== nothing
 end
 
 function _has_any_anchors(t::PriorTargets)
@@ -805,7 +813,8 @@ function _loss_terms(mu::AbstractVector, sigma::AbstractVector,
     return total, (anchor = anchor_term, gravity = gravity_term, mt = mt_term,
                    smooth = smooth_term, sigma = sigma_term, reference = reference_term,
                    grade = grade_term, density = density_term,
-                   susceptibility = susc_term, resistivity = res_term)
+                   susceptibility = susc_term, resistivity = res_term,
+                   conductivity_100kHz = NaN)
 end
 
 function _property_row(names::Vector{String}, name::AbstractString, nprop::Int)
@@ -847,8 +856,9 @@ function _loss_terms(mus::AbstractMatrix, sigmas::AbstractMatrix,
         (targets.anchors_density, weights.density, "density"),
         (targets.anchors_susceptibility, weights.susceptibility, "susceptibility"),
         (targets.anchors_resistivity, weights.resistivity, "resistivity"),
+        (targets.anchors_conductivity, weights.conductivity, "conductivity_100kHz"),
     )
-    grade_term = density_term = susc_term = res_term = NaN
+    grade_term = density_term = susc_term = res_term = cond_term = NaN
     for (anchors, w, pname) in groups
         anchors === nothing && continue
         row = _property_row(names, pname, nprop)
@@ -860,6 +870,8 @@ function _loss_terms(mus::AbstractMatrix, sigmas::AbstractMatrix,
             density_term = term
         elseif pname == "susceptibility"
             susc_term = term
+        elseif pname == "conductivity_100kHz"
+            cond_term = term
         else
             res_term = term
         end
@@ -870,7 +882,8 @@ function _loss_terms(mus::AbstractMatrix, sigmas::AbstractMatrix,
         # names follow the Keivitsa order and resistivity is last — so only if
         # the caller really meant property 1). Prefer the named groups.
         throw(ArgumentError(
-            "prior_loss: use anchors_grade/density/susceptibility/resistivity " *
+            "prior_loss: use named anchor groups " *
+            "(anchors_grade/density/susceptibility/resistivity/conductivity) " *
             "with a multi-property mu, not the legacy `anchors` field"))
     end
 
@@ -899,5 +912,6 @@ function _loss_terms(mus::AbstractMatrix, sigmas::AbstractMatrix,
     return total, (anchor = NaN, gravity = NaN, mt = NaN,
                    smooth = smooth_term, sigma = sigma_term, reference = reference_term,
                    grade = grade_term, density = density_term,
-                   susceptibility = susc_term, resistivity = res_term)
+                   susceptibility = susc_term, resistivity = res_term,
+                   conductivity_100kHz = cond_term)
 end

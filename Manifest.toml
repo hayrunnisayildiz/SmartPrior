@@ -2,7 +2,7 @@
 
 julia_version = "1.12.4"
 manifest_format = "2.0"
-project_hash = "528196a8207fe05271c40046b886130f198f3eaf"
+project_hash = "dc93518827e4235988280f4678a4ef2bba68108b"
 
 [[deps.ADTypes]]
 deps = ["PrecompileTools"]
@@ -294,6 +294,12 @@ deps = ["ChunkCodecCore", "Zstd_jll"]
 git-tree-sha1 = "34d9873079e4cb3d0c62926a225136824677073f"
 uuid = "55437552-ac27-4d47-9aa3-63184e8fd398"
 version = "1.0.0"
+
+[[deps.CodecZlib]]
+deps = ["TranscodingStreams", "Zlib_jll"]
+git-tree-sha1 = "970758a3d591a2a5c2a907c53f2e2f8c1b1d3537"
+uuid = "944b1d66-785c-5afd-91f1-9de20f533193"
+version = "0.7.9"
 
 [[deps.CodecZstd]]
 deps = ["TranscodingStreams", "Zstd_jll"]
@@ -2449,7 +2455,7 @@ uuid = "45858cf5-a6b0-47a3-bbea-62219f50df47"
 version = "0.1.5"
 
 [[deps.SmartPriorMT]]
-deps = ["ArchGDAL", "ComponentArrays", "ForwardDiff", "Interpolations", "JLD2", "LinearAlgebra", "Lux", "MTGeophysics", "Optimisers", "Printf", "Random", "Statistics", "Zygote"]
+deps = ["ArchGDAL", "ComponentArrays", "ForwardDiff", "Interpolations", "JLD2", "LinearAlgebra", "Lux", "MTGeophysics", "Optimisers", "Plots", "Printf", "Random", "Statistics", "Zygote"]
 path = "."
 uuid = "7ba2762e-3153-4b60-bd0e-7961f2e082cf"
 version = "0.1.0"

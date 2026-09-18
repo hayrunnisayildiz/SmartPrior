@@ -65,6 +65,7 @@ import JLD2
 import Optimisers
 import Zygote
 
+using CodecZlib
 using MTGeophysics: WS3DModel, load_ws3d_model, write_ws3d_model
 using MTGeophysics: RBFMap, build_rbf_map, apply_rbf_map!
 
@@ -73,6 +74,7 @@ include("Gravity.jl")
 include("MT1DAD.jl")
 include("Features.jl")
 include("KeivitsaIO.jl")
+include("CloncurryIO.jl")
 include("PriorNet.jl")
 include("Losses.jl")
 include("Train.jl")
@@ -149,5 +151,16 @@ export keivitsa_cleaned_intervals_path
 export load_keivitsa_grade_anchors, load_keivitsa_petrophysics_anchors
 export map_points_to_cells, aggregate_to_cells, desurvey_depths
 export KEIVITSA_PETRO_STATUS, KEIVITSA_GEOCHEM_PRIORITY, KEIVITSA_DRILL_GEOCHEM
+
+# Cloncurry–Ernest Henry non-geophysical prior line
+export CloncurrySamples, load_cloncurry_samples
+export cloncurry_derived_dir, cloncurry_petrophysics_path, cloncurry_metals_path
+export cloncurry_work_bounds, cloncurry_deposit_bounds, cloncurry_grid
+export cloncurry_geochemistry, cloncurry_lithology, cloncurry_coverage_points
+export cloncurry_property_coverage, load_cloncurry_anchors
+export cloncurry_grade_eligible, spatial_holdout
+export CLONCURRY_PROPERTY_NAMES, CLONCURRY_GEOCHEM_ELEMENTS
+export CLONCURRY_CONDUCTIVITY_STATUS, CLONCURRY_WORK_BOUNDS
+export CLONCURRY_CU_DL_PPM, CLONCURRY_COND_FLOOR_S_M
 
 end # module

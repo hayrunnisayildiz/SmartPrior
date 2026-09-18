@@ -1,0 +1,7 @@
+Sample,Mg_Concentration,Al_Concentration,Si_Concentration,Cu_Concentration,Zn_Concentration,U_Concentration,LE_Concentration,Co_Concentration
+S1,1000,2000,3000,100,50,2,9000,<LOD
+S2,1100,2100,3100,<LOD,60,3,9100,<LOD
+S3,1200,2200,3200,,70,4,9200,<LOD
+S4,1300,2300,3300,200,80,5,9300,<LOD
+S5,1400,2400,3400,10000,90,6,9400,<LOD
+S5b,1410,2410,3410,11000,91,7,9410,<LOD

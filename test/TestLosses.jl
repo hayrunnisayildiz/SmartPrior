@@ -645,6 +645,30 @@ end
         PriorTargets(anchors = ([1], [2.0], [1.0])))
 end
 
+@testset "conductivity_100kHz is a named fourth head, not resistivity" begin
+    g = _loss_grid()
+    n = ncells(g)
+    mus = fill(2.0, 4, n)
+    sigmas = fill(0.5, 4, n)
+    c = GravityCoupling(slope = 0.0)
+    t = PriorTargets(
+        anchors_grade = ([1], [2.0], [1.0]),
+        anchors_density = ([2], [2.0], [1.0]),
+        anchors_susceptibility = ([3], [2.0], [1.0]),
+        anchors_conductivity = ([4], [2.0], [1.0]),
+        property_names = ["grade", "density", "susceptibility", "conductivity_100kHz"],
+        sigma_target = 0.5,
+    )
+    r = loss_report(mus, sigmas, c, g, t)
+    @test r.conductivity_100kHz ≈ 2 * log(0.5)
+    @test isnan(r.resistivity)
+    @test isfinite(r.grade)
+    net = PriorNet(3; width = 8, depth = 2, nproperties = 4,
+                   property_names = ["grade", "density", "susceptibility",
+                                     "conductivity_100kHz"])
+    @test net.property_names[4] == "conductivity_100kHz"
+end
+
 @testset "named-anchor NLL is calibrated to each group's own std" begin
     g = _loss_grid()
     n = ncells(g)

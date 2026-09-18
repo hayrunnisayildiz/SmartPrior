@@ -180,6 +180,7 @@ function _replace_sigma_vec(t::PriorTargets, sigma_vec)
         anchors_density = t.anchors_density,
         anchors_susceptibility = t.anchors_susceptibility,
         anchors_resistivity = t.anchors_resistivity,
+        anchors_conductivity = t.anchors_conductivity,
         property_names = t.property_names,
     )
 end
@@ -331,12 +332,17 @@ function train_prior(net::PriorNet,
             if config.verbose
                 @printf("epoch %6d  total %.5e  slope %+.3f  sat %.3f",
                         epoch, report.total, slope, sat)
-                for (label, field) in (("grade", :grade), ("dens", :density),
-                                       ("sus", :susceptibility), ("res", :resistivity),
-                                       ("sm", :smooth), ("sig", :sigma))
-                    t = getfield(report, field)
+                for (label, term_field, w_field) in (
+                        ("grade", :grade, :grade),
+                        ("dens", :density, :density),
+                        ("sus", :susceptibility, :susceptibility),
+                        ("res", :resistivity, :resistivity),
+                        ("cond", :conductivity_100kHz, :conductivity),
+                        ("sm", :smooth, :smooth),
+                        ("sig", :sigma, :sigma))
+                    t = getfield(report, term_field)
                     isfinite(t) || continue
-                    w = getfield(config.weights, field)
+                    w = getfield(config.weights, w_field)
                     share = report.total != 0 ? 100 * w * t / report.total : NaN
                     @printf("  %s %.1f%%", label, share)
                 end

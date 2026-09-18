@@ -16,4 +16,5 @@ using SmartPriorMT
     include("TestProfile2D.jl")
     include("TestRealDataIO.jl")
     include("TestKeivitsaIO.jl")
+    include("TestCloncurryIO.jl")
 end

@@ -22,6 +22,9 @@ tmp_keivitsa_prior_z10/
 tmp_keivitsa_prior_sigmafloor/
 tmp_keivitsa_prior_wide/
 tmp_keivitsa_prior_deep/
+tmp_cloncurry_prior/
+tmp_cloncurry_prior_eh/
+tmp_cloncurry_prior_eh_holdout/
 tmp_musgrave/
 tmp_musgrave_coarse/
 tmp_musgrave_smooth50/
