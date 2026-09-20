@@ -52,28 +52,35 @@ function padded_bounds(values; pad = 0.2, fallback)
     return (lo - pad * span, hi + pad * span)
 end
 
-function write_structured_grid_vts(path::AbstractString,
-                                   xs::AbstractVector{<:Real},
-                                   ys::AbstractVector{<:Real},
-                                   zs::AbstractVector{<:Real},
-                                   arrays;
-                                   scalars::AbstractString = "grade")
-    nx, ny, nz = length(xs), length(ys), length(zs)
-    npts = nx * ny * nz
+# Cell-centred block model: POINTS are cell *corners* (grid edges), arrays are
+# CellData in Julia vec order. Sample XYZ then falls inside a block instead of
+# hanging half a cell off a centre-point mesh (100 m XY made that look like a
+# collar shift).
+function write_blockmodel_vts(path::AbstractString,
+                              x::AbstractVector{<:Real},
+                              y::AbstractVector{<:Real},
+                              z::AbstractVector{<:Real},
+                              arrays;
+                              scalars::AbstractString = "grade")
+    nx, ny, nz = length(x) - 1, length(y) - 1, length(z) - 1
+    (nx > 0 && ny > 0 && nz > 0) || throw(ArgumentError(
+        "write_blockmodel_vts: need at least one cell on each axis"))
+    ncel = nx * ny * nz
+    npts = (nx + 1) * (ny + 1) * (nz + 1)
     names = String[]
     blobs = Vector{Vector{Float64}}()
     for (name, a) in arrays
-        length(a) == npts || throw(DimensionMismatch(
-            "write_structured_grid_vts: $(name) has $(length(a)) values, expected $npts"))
+        length(a) == ncel || throw(DimensionMismatch(
+            "write_blockmodel_vts: $(name) has $(length(a)) values, expected $ncel cells"))
         push!(names, String(name))
         push!(blobs, collect(Float64, a))
     end
     points = Vector{Float64}(undef, 3 * npts)
     t = 1
-    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-        points[t]     = Float64(xs[i])
-        points[t + 1] = Float64(ys[j])
-        points[t + 2] = Float64(zs[k])
+    @inbounds for k in 1:(nz + 1), j in 1:(ny + 1), i in 1:(nx + 1)
+        points[t]     = Float64(x[i])
+        points[t + 1] = Float64(y[j])
+        points[t + 2] = Float64(z[k])
         t += 3
     end
     header = 4
@@ -84,19 +91,19 @@ function write_structured_grid_vts(path::AbstractString,
         off += header + 8 * length(blobs[i])
     end
     offsets[end] = off
-    ext = "0 $(nx - 1) 0 $(ny - 1) 0 $(nz - 1)"
+    ext = "0 $nx 0 $ny 0 $nz"
     open(path, "w") do io
         println(io, "<?xml version=\"1.0\"?>")
         println(io, "<VTKFile type=\"StructuredGrid\" version=\"0.1\" byte_order=\"LittleEndian\" header_type=\"UInt32\">")
         println(io, "  <StructuredGrid WholeExtent=\"$ext\">")
         println(io, "    <Piece Extent=\"$ext\">")
-        println(io, "      <PointData Scalars=\"$scalars\">")
+        println(io, "      <CellData Scalars=\"$scalars\">")
         for (name, o) in zip(names, offsets)
             @printf(io,
                     "        <DataArray type=\"Float64\" Name=\"%s\" format=\"appended\" offset=\"%d\"/>\n",
                     name, o)
         end
-        println(io, "      </PointData>")
+        println(io, "      </CellData>")
         println(io, "      <Points>")
         @printf(io,
                 "        <DataArray type=\"Float64\" Name=\"Points\" NumberOfComponents=\"3\" format=\"appended\" offset=\"%d\"/>\n",
@@ -147,81 +154,76 @@ from matplotlib.colors import LinearSegmentedColormap
 vts, png, samples, shell_s = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 title = os.environ.get("ORE_TITLE", "Ernest Henry SmartPrior")
 grid = pv.read(vts)
+if "grade" in grid.cell_data:
+    grid = grid.cell_data_to_point_data()
 gold = LinearSegmentedColormap.from_list(
     "minerai_gold", ["#a67c00", "#c9a227", "#dbb430", "#f0d050", "#ffe566"], N=256)
+shells = [(float(a), float(b)) for a, b in
+          (p.split(",") for p in shell_s.split(";"))]
+cutoff = min(iso for iso, _ in shells)
+grade = np.asarray(grid["grade"], dtype=np.float64)
+core = np.isfinite(grade) & (grade >= cutoff)
+if not np.any(core):
+    raise SystemExit("no cells above cutoff")
+pts = np.asarray(grid.points)
+lo = pts[core].min(axis=0) - 150.0
+hi = pts[core].max(axis=0) + 150.0
+grid = grid.clip_box([lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]], invert=False)
+if grid.n_points == 0:
+    raise SystemExit("clip emptied the grid")
+cv = np.asarray(grid["grade"])
+above = cv[np.isfinite(cv) & (cv >= cutoff)]
+clim_hi = float(np.percentile(above, 97)) if above.size else cutoff + 1.0
+if clim_hi <= cutoff:
+    clim_hi = cutoff + max(50.0, cutoff * 0.15)
+
 pv.OFF_SCREEN = True
 plotter = pv.Plotter(off_screen=True, window_size=(1600, 1100))
 plotter.set_background("white")
-shells = []
-for part in shell_s.split(";"):
-    iso, op = part.split(",")
-    shells.append((float(iso), float(op)))
-cutoff = min(iso for iso, _ in shells)
-grade = np.asarray(grid["grade"], dtype=np.float64)
-dims = tuple(int(v) for v in grid.dimensions)
-vol = grade.reshape(dims, order="F")
-try:
-    from scipy.ndimage import gaussian_filter, maximum_filter
-    work = gaussian_filter(np.nan_to_num(vol, nan=0.0), sigma=0.25, mode="nearest")
-    grid["grade_blur"] = work.ravel(order="F")
-    contour_name = "grade_blur"
-    masked = np.where(vol >= cutoff, vol, 0.0)
-    display = maximum_filter(masked, size=3)
-    grid["DisplayGrade"] = display.ravel(order="F")
-    color_name = "DisplayGrade"
-    color_vals = display.ravel(order="F")
-except Exception:
-    contour_name = "grade"
-    color_name = "grade"
-    color_vals = grade
-above = color_vals[np.isfinite(color_vals) & (color_vals >= cutoff)]
-clim_hi = float(np.percentile(above, 97)) if above.size else cutoff + 1.0
-if clim_hi <= cutoff * 1.08:
-    clim_hi = float(np.max(above)) if above.size else cutoff + 1.0
-if clim_hi <= cutoff:
-    clim_hi = cutoff + max(50.0, cutoff * 0.15)
 built = 0
 bar_iso = shells[0][0]
 for iso, opacity in shells:
-    surf = grid.contour(isosurfaces=[iso], scalars=contour_name)
+    surf = grid.contour(isosurfaces=[iso], scalars="grade")
     if surf.n_points == 0:
         print("EMPTY_ISO", iso)
         continue
-    taubin = getattr(surf, "smooth_taubin", None)
-    if callable(taubin):
-        try:
-            surf = taubin(n_iter=12 if iso >= 4000.0 else 25, pass_band=0.1)
-        except Exception:
-            pass
-    if color_name != contour_name:
-        surf = surf.sample(grid)
     built += 1
     plotter.add_mesh(
-        surf, scalars=color_name, cmap=gold, clim=(cutoff, clim_hi),
+        surf, scalars="grade", cmap=gold, clim=(cutoff, clim_hi),
         smooth_shading=True, opacity=opacity,
         show_scalar_bar=(abs(iso - bar_iso) < 1e-6),
         scalar_bar_args={
             "title": "predicted Cu (ppm)",
-            "vertical": True, "position_x": 0.82, "position_y": 0.22,
+            "vertical": True, "position_x": 0.88, "position_y": 0.18,
             "fmt": "%.0f", "title_font_size": 12, "label_font_size": 10,
         },
         name=f"iso_{int(iso)}",
     )
 if built == 0:
     raise SystemExit("empty isosurface")
+plotter.view_isometric()
+plotter.reset_camera()
+plotter.camera.zoom(1.6)
 if samples and os.path.isfile(samples):
     rows = np.loadtxt(samples, delimiter=",", skiprows=1)
     if rows.ndim == 1:
         rows = rows.reshape(1, -1)
-    cloud = pv.PolyData(rows[:, :3])
-    cloud["assay_ppm"] = rows[:, 3]
-    plotter.add_mesh(cloud, color="#222222", point_size=8,
-                     render_points_as_spheres=True, opacity=0.85,
-                     name="cu_samples")
+    xyz, cu = rows[:, :3], rows[:, 3]
+    inside = np.all((xyz >= lo) & (xyz <= hi), axis=1)
+    xyz, cu = xyz[inside], cu[inside]
+    print("SAMPLES_IN_FRAME", len(xyz), "of", len(rows))
+    if len(xyz):
+        hi_m = cu >= 2000.0
+        if np.any(~hi_m):
+            plotter.add_mesh(pv.PolyData(xyz[~hi_m]), color="#555555",
+                             point_size=8, render_points_as_spheres=True,
+                             name="assay_bg")
+        if np.any(hi_m):
+            plotter.add_mesh(pv.PolyData(xyz[hi_m]), color="#c0392b",
+                             point_size=14, render_points_as_spheres=True,
+                             name="assay_hi")
 plotter.add_axes()
 plotter.add_text(title, font_size=11)
-plotter.view_isometric()
-plotter.camera.zoom(1.15)
 plotter.show(screenshot=png, auto_close=True)
 print("WROTE", png)
 """
@@ -288,7 +290,7 @@ n_5000 = count(g -> isfinite(g) && g >= 5000, grade_ppm)
 max_ppm = maximum(grade_ppm)
 @info "inference" mean_mu_grade = mean(mus[1, :]) max_ppm n_500 n_2000 n_5000
 
-write_structured_grid_vts(VTS_PATH, grid.cx, grid.cy, grid.cz, [
+write_blockmodel_vts(VTS_PATH, grid.x, grid.y, grid.z, [
     "grade" => grade_ppm,
     "mu_grade" => mus[1, :],
     "sigma_grade" => sigmas[1, :],
@@ -312,10 +314,9 @@ open(SAMPLES_CSV, "w") do io
 end
 
 shells = Tuple{Float64,Float64}[]
-n_500 > 0 && push!(shells, (500.0, 0.18))
-n_2000 > 0 && push!(shells, (2000.0, 0.45))
-n_5000 > 0 && push!(shells, (5000.0, 0.90))
-isempty(shells) && error("no cells above 500 ppm; max=$(max_ppm)")
+n_2000 > 0 && push!(shells, (2000.0, 0.35))
+n_5000 > 0 && push!(shells, (5000.0, 0.95))
+isempty(shells) && error("no cells above 2000 ppm; max=$(max_ppm)")
 
 py = find_pyvista_python()
 py === nothing && error("no PyVista python; set SMARTPRIOR_PYTHON")

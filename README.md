@@ -253,8 +253,11 @@ assay. Grid occupancy on D is 104 / 57,816 = 0.18%. Only 8 cells are
 A 50-epoch work-box health check (`tmp_cloncurry_prior/`) is not a result:
 1000 m cells stacked 347 Cu samples into 48 cells.
 
-Predicted Cu on D, nested 500 / 2,000 / 5,000 ppm shells. Black points are
-the 255 METAL Cu samples. **In-sample** (104 grade-anchor cells); not a
+Predicted Cu on D, nested 2,000 / 5,000 ppm shells on a **cell-centred**
+block model (corners = grid edges, so METAL sample XYZ sits inside the
+block, not half a cell off a centre-point mesh). Red points: assay
+≥ 2,000 ppm; grey: other samples in the same crop. Distant EH outliers
+are omitted from the frame. **In-sample** (104 grade-anchor cells); not a
 hold-out. The predicted field has 96 cells ≥ 5,000 ppm (max 16,003 ppm)
 even though only 8 of those 104 anchors sit at ≥ 5,000 ppm.
 
