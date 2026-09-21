@@ -24,11 +24,11 @@ or the training loop. This pipeline does **not** feed VFSA.
 | Question | Answer |
 |---|---|
 | Active dataset | **Cloncurry–Ernest Henry** (METAL, 1,590 samples) |
-| Grid in use | **D — Ernest Henry only**, 100 m XY / 50 m Z, 24×73×33 = 57,816 cells (`tmp_cloncurry_prior_eh/`) |
 | Fourth head | **`conductivity_100kHz`** — KT-20, 100 kHz, specimen-scale. Not MT bulk conductivity; do not call it resistivity |
 | Connected to VFSA? | **No.** Deferred — see [Relationship to VFSA](#relationship-to-vfsa) |
-| Full-data D, 250 epoch | log10-RMSE **0.005** on **104** grade cells. **Not a hold-out.** Do not report as better than Keivitsa (0.249 on 988 cells) |
-| Spatial hold-out | **Not run.** A 300 m sample-level buffer left **0** training samples (see below) |
+| Full-data D (Ernest Henry) | log10-RMSE **0.005** on **104** grade cells. **Memorization**, not a hold-out. Do not report as better than Keivitsa (0.249 on 988 cells) |
+| Leak-free hold-out | Drillhole groups on Ernest Henry, 191/45/19 **Cu samples** (7/2/2 holes). Grade test log10-RMSE **0.697** (beats train-mean 0.908). Density / susceptibility / `conductivity_100kHz` all **lose to naive**. Single seed |
+| District hold-out | Driver exists (`examples/holdout_cloncurry_prior.jl`, sample AABB, ~70/15/15 of named collars). **No completed run yet** |
 
 Keivitsa experiment numbers (25 m grid, 300-epoch checkpoint, etc.) are in
 [Previous case study (Keivitsa)](#previous-case-study-keivitsa). They are not
@@ -52,8 +52,8 @@ Set `CLONCURRY_ROOT` if the package lives somewhere else. `mt/`, `gravity/`
 and `magnetics/` are in that tree and are **not** opened. Tiny copies for
 unit tests only: `test/fixtures/cloncurry_*.csv`.
 
-`tmp_cloncurry_prior/` and `tmp_cloncurry_prior_eh/` are **output**
-directories (checkpoints, reports), not the source data.
+`tmp_cloncurry_prior*` directories are **output** (checkpoints, reports),
+not the source data.
 
 ---
 
@@ -130,6 +130,8 @@ Of the 1,590 samples, 457 lie in the requested work area
 (140.5–140.9°E, 20.68–19.99°S). Ernest Henry itself has 269 finite-xyz
 samples, of which 255 carry Cu and all 255 map into grid D (104 grade
 cells). The remaining district Cu (1,185 − 255) sits outside this box.
+The sample AABB covering every finite-xyz row is ~118 × 219 km; the
+42 × 76 km work box drops ~1,100 of them.
 
 ---
 
@@ -148,13 +150,22 @@ Julia 1.10+, from the repo root:
 ```bash
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
 
-# Health check (work box, 1000 m × 100 m, 50 epoch)
+# District sample AABB (current default), spacing from SMARTPRIOR_TARGET_CELLS
 julia --project=. examples/train_cloncurry_prior.jl
 
-# Grid D — Ernest Henry, 100 m × 50 m, 250 epoch
+# Grid D — Ernest Henry, 100 m × 50 m, 250 epoch (full-data; not a hold-out)
 SMARTPRIOR_WORK=tmp_cloncurry_prior_eh SMARTPRIOR_BOX=ernest_henry \
   SMARTPRIOR_CELL_M=100 SMARTPRIOR_CELL_Z=50 SMARTPRIOR_EPOCHS=250 \
   julia --project=. examples/train_cloncurry_prior.jl
+
+# VTK + Cu isosurface from a checkpoint
+SMARTPRIOR_WORK=tmp_cloncurry_prior_eh SMARTPRIOR_BOX=ernest_henry \
+  SMARTPRIOR_CELL_M=100 SMARTPRIOR_CELL_Z=50 \
+  julia --project=. examples/export_cloncurry_blockmodel.jl
+
+# Drillhole-group hold-out (district AABB, ~70/15/15 of named collars)
+SMARTPRIOR_WORK=tmp_cloncurry_prior_district_holdout_w256_d4 \
+  julia --project=. examples/holdout_cloncurry_prior.jl
 ```
 
 Useful environment variables:
@@ -163,19 +174,18 @@ Useful environment variables:
 |---|---|---|
 | `CLONCURRY_ROOT` | `~/Desktop/datasets4HY/Cloncurry_integrated_2026-09-17` | METAL package root |
 | `SMARTPRIOR_WORK` | `tmp_cloncurry_prior/` | checkpoint + report directory |
-| `SMARTPRIOR_BOX` | `work` | `work` (district box) or `ernest_henry` (grid D) |
-| `SMARTPRIOR_CELL_M` | 1000 | XY cell size (m) |
-| `SMARTPRIOR_CELL_Z` | 100 | vertical cell size (m) |
-| `SMARTPRIOR_EPOCHS` | 50 | training budget |
+| `SMARTPRIOR_BOX` | `district` | `district` (sample AABB), `work`, or `ernest_henry` (grid D) |
+| `SMARTPRIOR_CELL_M` | from target (district) / 1000 (work) | XY cell size (m) |
+| `SMARTPRIOR_CELL_Z` | from target (district) / 100 (work) | vertical cell size (m) |
+| `SMARTPRIOR_TARGET_CELLS` | 50000 | district spacing target |
+| `SMARTPRIOR_EPOCHS` | 50 (train) / 250 (hold-out) | training budget |
 | `SMARTPRIOR_WIDTH` | 256 | MLP width |
 | `SMARTPRIOR_DEPTH` | 4 | MLP depth |
 
-Outputs in `SMARTPRIOR_WORK`: `cloncurry_prior.jld2`,
+Train outputs in `SMARTPRIOR_WORK`: `cloncurry_prior.jld2`,
 `cloncurry_prior_report.txt`, `cloncurry_prior_shares.tsv`.
-
-A spatial Cu hold-out driver exists at
-`examples/holdout_cloncurry_prior.jl` but has **not** completed a 250-epoch
-run (see [Hold-out attempt](#hold-out-attempt-not-a-result)).
+Export also writes `cloncurry_smartprior_blockmodel.vts` and copies the
+PNG to `docs/assets/cloncurry_eh_cu_iso.png`.
 
 Tests: `julia --project=. -e 'using Pkg; Pkg.test()'`.
 
@@ -190,10 +200,12 @@ Tests: `julia --project=. -e 'using Pkg; Pkg.test()'`.
 | `src/{Grid,Features,PriorNet,Losses,Train}.jl` | shared neural-field stack |
 | `examples/train_cloncurry_prior.jl` | train (full-data) |
 | `examples/export_cloncurry_blockmodel.jl` | VTK + 3D Cu isosurface from a checkpoint |
-| `examples/holdout_cloncurry_prior.jl` | spatial Cu hold-out (not yet a completed run) |
+| `examples/holdout_cloncurry_prior.jl` | drillhole-group hold-out (district default) |
 | `examples/train_keivitsa_prior.jl` | previous case study |
 | `tmp_cloncurry_prior/` | work-box health check (gitignored) |
-| `tmp_cloncurry_prior_eh/` | grid D, 250 epoch (gitignored) |
+| `tmp_cloncurry_prior_eh/` | grid D, 250 epoch full-data (gitignored) |
+| `tmp_cloncurry_prior_eh_group_holdout/` | EH drillhole hold-out, width 256 / depth 4 |
+| `tmp_cloncurry_prior_eh_group_holdout_w64_d2/` | same split, width 64 / depth 2 |
 | `tmp_keivitsa_prior*/` | previous diagnostic runs (gitignored) |
 | `archive/mt_gravity_tmp_outputs/` | archived gravity+MT / Musgrave runs |
 | `examples/compare_prior_2d.jl`, `examples/musgrave_*.jl` | legacy gravity+MT examples |
@@ -216,20 +228,21 @@ assume that data is open-for-training.
 
 ## Open questions (Cloncurry)
 
-1. **Hold-out of D's 0.005** — sample-level 300 m buffer is infeasible on
-   this deposit (see below). A cluster-level split is the next test; until
-   it exists, D is in-sample fit only.
-2. **District vs deposit box** — 1,590 loaded; D uses 269 EH samples
-   (255 Cu). Option C (sample hull, 400/100 m) would mix other deposits,
-   not add EH samples.
-3. **conductivity_100kHz zeros** — 711 of 1,250 finite values are exact 0
+1. **District hold-out** — the driver is retargeted to the sample AABB
+   (~70/15/15 of 121 named collars). Until that run exists, the leak-free
+   numbers below are Ernest Henry only (11 holes).
+2. **Petrophysics heads lose to naive on EH** — density, susceptibility,
+   and `conductivity_100kHz` lose at both 256/4 and 64/2. That is not a
+   capacity result; 7 train holes may not carry those heads. Not tested
+   on the district split.
+3. **`conductivity_100kHz` zeros** — 711 of 1,250 finite values are exact 0
    and are lifted to 0.01 S/m before log10.
 4. **No gradient-level loss decomposition** — pay tables are value shares
    only.
 
 ---
 
-## Ernest Henry, grid D (250 epoch)
+## Ernest Henry, grid D (250 epoch, full-data)
 
 Width 256, depth 4, σ floor = 1× group std. Wall 1,322 s.
 Single seed. From `tmp_cloncurry_prior_eh/` (gitignored).
@@ -255,11 +268,11 @@ A 50-epoch work-box health check (`tmp_cloncurry_prior/`) is not a result:
 
 Predicted Cu on D, nested 2,000 / 5,000 ppm shells on a **cell-centred**
 block model (corners = grid edges, so METAL sample XYZ sits inside the
-block, not half a cell off a centre-point mesh). Red points: assay
-≥ 2,000 ppm; grey: other samples in the same crop. Distant EH outliers
-are omitted from the frame. **In-sample** (104 grade-anchor cells); not a
-hold-out. The predicted field has 96 cells ≥ 5,000 ppm (max 16,003 ppm)
-even though only 8 of those 104 anchors sit at ≥ 5,000 ppm.
+block, not half a cell off a centre-point mesh). Drill traces coloured by
+assay log10 Cu; distant EH holes MMA002 and MMA003 are omitted from the
+frame. **In-sample** (104 grade-anchor cells); not a hold-out. The
+predicted field has 96 cells ≥ 5,000 ppm (max 16,003 ppm) even though
+only 8 of those 104 anchors sit at ≥ 5,000 ppm.
 
 ![Ernest Henry D — predicted Cu isosurface](docs/assets/cloncurry_eh_cu_iso.png)
 
@@ -267,22 +280,55 @@ Rebuild: `examples/export_cloncurry_blockmodel.jl` (writes `.vts` + PNG).
 
 ---
 
-## Hold-out attempt (not a result)
+## Leak-free hold-out (Ernest Henry drillholes)
 
-`examples/holdout_cloncurry_prior.jl` hides Cu labels on a spatial split
-(`spatial_holdout` in `src/CloncurryIO.jl`). Grade NLL sees the train
-split only; pXRF / lithology / coverage still use all samples (Cu is
-never a feature).
+`examples/holdout_cloncurry_prior.jl` used to hide labels by a 300 m
+sample buffer; that left **0** training points on Ernest Henry (median
+nearest-neighbour 9.5 m). Whole-collar assignment replaced it.
 
-A **300 m sample-level** buffer on the 255 in-grid Cu samples left
-**0 training points** (18 test, 237 inside the buffer). Median
-nearest-neighbour distance on Ernest Henry is **9.5 m** (XY 2.7 m) —
-specimens sit along holes, not on a 300 m lattice. The same 300 m rule
-applied to **50 m-linked clusters** would leave roughly 191 train / 45
-test / 19 dropped; that run has not been started.
+191 / 45 / 19 are **Cu sample counts**, not hole counts. Same collar
+split for both capacity runs (`split_seed=2026`):
 
-Until a hold-out RMSE exists, treat 0.005 as memorisation risk, not
-generalisation.
+| | train | val | test |
+|---|---|---|---|
+| Cu samples | 191 | 45 | 19 |
+| holes | 7 | 2 | 2 |
+| collars | EH242, EH550, EH591, EH691, EH699, EHMT001, MMA003 | EH435, EH632 | EH147, MMA002 |
+
+Train labels come from train holes only, for all four properties. pXRF /
+lithology / coverage still use all samples (Cu is never a feature). Val
+is reported, not trained on. Naive reference: train-mean RMSE on the test
+holes for grade / density / susceptibility; conductivity floor (−2) for
+`conductivity_100kHz`. Single seed.
+
+| property | 256/4 test RMSE | 64/2 test RMSE | naive | 256/4 beats naive? |
+|---|---:|---:|---:|---|
+| grade (log10 Cu) | **0.697** | 1.114 | 0.908 | **yes** |
+| density | 0.202 | 0.267 | 0.187 | no |
+| susceptibility | 0.532 | 0.833 | 0.421 | no |
+| `conductivity_100kHz` | 0.276 | 0.416 | 0.228 | no |
+
+256/4: best epoch 200 (run stopped after epoch 225; loss had already
+risen). Train grade RMSE 0.652, val 0.978. `conductivity_100kHz` moved
+off the −2 floor on the grid (10,292 distinct values at 4 d.p.; 0.27% of
+cells at the floor).
+
+64/2: 250 epoch, wall 303 s, same split. All four heads lose to naive,
+including grade.
+
+D's in-sample 0.005 was memorization; the leak-free grade number on this
+deposit is **0.697**. Shrinking the net did not rescue the petrophysics
+heads — 7 train holes do not carry them. These numbers are Ernest Henry
+only; they are not a district result.
+
+Reproduce the 256/4 numbers from
+`tmp_cloncurry_prior_eh_group_holdout/cloncurry_holdout_report.txt`
+(checkpoint `cloncurry_holdout_w256.jld2`). The 64/2 report is
+`tmp_cloncurry_prior_eh_group_holdout_w64_d2/cloncurry_holdout_report.txt`.
+
+The hold-out *driver* now defaults to the district sample AABB
+(~70/15/15 of named collars). That run has not been completed; do not
+treat the table above as a district score.
 
 ---
 
