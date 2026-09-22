@@ -253,11 +253,19 @@ Nested 2,000 / 5,000 ppm shells on a cell-centred block model; drill traces
 coloured by assay log10 Cu. Export:
 `examples/export_cloncurry_blockmodel.jl`.
 
+**Current (Z = 100 m, 100-epoch resume)** —
+`tmp_cloncurry_prior_district_holdout_w256_d4_z100/` →
+`docs/assets/cloncurry_district_z100_cu_iso.png`.
+Gold cubes = predicted Cu **block cells** (≥ 2000 ppm) on the PriorGrid;
+black tubes = drill traces (Z exaggerated ≈×10.7). Outer wireframe is a
+**square cube** (equal E/N/Z visual side ≈ 226 km). Purple–yellow spheres =
+assay log10 Cu.
+
+![Cloncurry district Z=100 m — predicted Cu blocks + drill traces](docs/assets/cloncurry_district_z100_cu_iso.png)
+
 **Geology score (Z = 200 m, 250 epochs)** —
 `tmp_cloncurry_prior_district_holdout_w256_d4_geology/` →
 `docs/assets/cloncurry_district_geology_cu_iso.png`.
-Gold cubes = predicted Cu **block cells** (≥ 2000 ppm) on the PriorGrid;
-black tubes = drill traces. Purple–yellow spheres = assay log10 Cu.
 
 ![Cloncurry district geology (Z=200 m) — predicted Cu + drill traces](docs/assets/cloncurry_district_geology_cu_iso.png)
 
@@ -294,14 +302,14 @@ SMARTPRIOR_WORK=tmp_cloncurry_prior_district_holdout_w256_d4_z100 \
 # Directional variogram / anisotropy (writes tmp_cloncurry_variogram/)
 julia --project=. examples/variogram_cloncurry.jl
 
-# VTK + Cu isosurface — geology Z=200 checkpoint
-SMARTPRIOR_WORK=tmp_cloncurry_prior_district_holdout_w256_d4_geology \
+# VTK + Cu isosurface — current district Z=100 checkpoint
+SMARTPRIOR_WORK=tmp_cloncurry_prior_district_holdout_w256_d4_z100 \
   SMARTPRIOR_BOX=district SMARTPRIOR_WIDTH=256 SMARTPRIOR_DEPTH=4 \
-  SMARTPRIOR_CELL_M=2300 SMARTPRIOR_CELL_Z=200 \
+  SMARTPRIOR_CELL_M=2300 SMARTPRIOR_CELL_Z=100 \
   SMARTPRIOR_PYTHON=$HOME/mtproject/.venv/bin/python \
   julia --project=. examples/export_cloncurry_blockmodel.jl
 # then: cp $WORK/cloncurry_district_geology_cu_iso.png \
-#          docs/assets/cloncurry_district_geology_cu_iso.png
+#          docs/assets/cloncurry_district_z100_cu_iso.png
 
 # VTK + Cu isosurface from an EH checkpoint
 SMARTPRIOR_WORK=tmp_cloncurry_prior_eh SMARTPRIOR_BOX=ernest_henry \
