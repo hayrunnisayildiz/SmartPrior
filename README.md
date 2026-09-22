@@ -24,8 +24,9 @@ archive only — **out of scope** for this pipeline (not deferred, not connected
 | Active dataset | Cloncurry district sample AABB (~118 × 219 km), 120 named holes |
 | Fourth head | **`conductivity_100kHz`** — KT-20, 100 kHz, specimen-scale. **Not** MT bulk conductivity |
 | Leak-free result | District drillhole hold-out 84/18/18, `split_seed=2026`, width=256 / depth=4 |
-| Density vs naive | Still loses (see [Results](#results--district-drillhole-hold-out)) |
-| Structural geology | In `src/CloncurryIO.jl` (+16 channels → 69 total); district retrain with geology **not finished** (no report yet) |
+| Active mesh | **2300 m XY × 100 m Z** (default; refined from 200 m Z after variogram) |
+| Density vs naive | Still loses after five independent interventions (see [Results](#results--district-drillhole-hold-out)) |
+| Structural geology | Live: +16 channels → **69** total; scored under `…_w256_d4_geology/` |
 
 ---
 
@@ -81,10 +82,10 @@ geology was appended):
 | Drillhole lithology | 15 | `lith_AMP` … `lith_PSM`, `lith_OTHER` (one-hot; rare → OTHER) |
 | Coverage | 1 | `sample_distance` |
 
-### Structural geology (in code; +16 → **69 channels**)
+### Structural geology (+16 → **69 channels**, live on district hold-out)
 
-From a live channel dump (`structure_distance_channels` /
-`surface_geology_channels` on the district grid):
+From `structure_channels` / `surface_geology_channels` on the geology and
+Z=100 reports:
 
 | Group | Count | Names |
 |---|---:|---|
@@ -96,9 +97,9 @@ Surface one-hots sit **beside** drillhole `lith_*`, not instead of them.
 Fold / Layering are not separate channels (few lines; they only feed
 `struct_line_distance`).
 
-The completed district hold-out numbers below are still the **53-channel**
-run. Geology-augmented retrain:
-`tmp_cloncurry_prior_district_holdout_w256_d4_geology/` (report pending).
+Geology-augmented district hold-out (69 channels, Z=200 m mesh):
+`tmp_cloncurry_prior_district_holdout_w256_d4_geology/`. Current default
+mesh is Z=100 m (see [Z-resolution refinement](#z-resolution-refinement)).
 
 ---
 
@@ -122,7 +123,7 @@ model. 711 / 1,250 finite values are exact 0 and are lifted to 0.01 S/m before
 log10 (`CLONCURRY_COND_FLOOR_S_M`).
 
 Architecture default for district hold-out: **width = 256**, **depth = 4**,
-250 epochs.
+250 epochs (latest Z=100 m score below used a 100-epoch resume).
 
 ---
 
@@ -132,8 +133,9 @@ Architecture default for district hold-out: **width = 256**, **depth = 4**,
 |---|---|---|
 | `tmp_cloncurry_prior_eh/` | Ernest Henry box, **all** labels, 104 grade cells | **No** — in-sample fit (log10-RMSE **0.005**) |
 | `tmp_cloncurry_prior_eh_group_holdout/` | EH 7/2/2 holes | Diagnostic only — showed EH is too thin |
-| `tmp_cloncurry_prior_district_holdout_w256_d4/` | District **84/18/18** holes, `split_seed=2026` | **Yes** — leak-free district score |
-| `…_w256_d4_geology/` | Same split + geology channels | Not ready |
+| `tmp_cloncurry_prior_district_holdout_w256_d4/` | District **84/18/18**, 53 ch, Z=200 m | Leak-free; **before geology** |
+| `…_w256_d4_geology/` | Same split + geology (69 ch), Z=200 m | Leak-free geology score |
+| `…_w256_d4_z100/` | Same split + geology, **Z=100 m**, 100 epochs | **Current** district score |
 
 Naive reference on district: train-mean RMSE on test holes for grade /
 density / susceptibility; conductivity **floor** (−2 = log10 0.01 S/m) for
@@ -146,12 +148,27 @@ density / susceptibility; conductivity **floor** (−2 = log10 0.01 S/m) for
 
 ## Results — district drillhole hold-out
 
+All rows below use the same collar split: **84 / 18 / 18** holes,
+`split_seed=2026`, samples 1,105 / 251 / 230, width=256 / depth=4.
+
+### With structural geology (Z = 200 m)
+
+Source:
+`tmp_cloncurry_prior_district_holdout_w256_d4_geology/cloncurry_holdout_report.txt`
+(69 channels; grid (52, 96, 11) @ **2300 m × 200 m**; best epoch 200 / 250).
+
+| property | test RMSE | naive | beats naive? |
+|---|---:|---:|---|
+| grade (log10 Cu) | **1.337** | 1.339 | **yes** (barely) |
+| density | 0.590 | 0.469 | **no** |
+| susceptibility | **1.341** | 1.612 | **yes** |
+| `conductivity_100kHz` | **1.001** | 1.393 (floor) | **yes** |
+
+### Before geology (same split, 53 channels, Z = 200 m)
+
 Source:
 `tmp_cloncurry_prior_district_holdout_w256_d4/cloncurry_holdout_report.txt`
-(53 channels, no structural geology; best epoch 200; width=256, depth=4).
-
-Grid: sample AABB, (52, 96, 11) = 54,912 cells @ 2300 m × 200 m.
-Holes 84 / 18 / 18; samples 1,105 / 251 / 230.
+(best epoch 200 / 250).
 
 | property | test RMSE | naive | beats naive? |
 |---|---:|---:|---|
@@ -160,9 +177,97 @@ Holes 84 / 18 / 18; samples 1,105 / 251 / 230.
 | susceptibility | **1.364** | 1.612 | **yes** |
 | `conductivity_100kHz` | **1.006** | 1.393 (floor) | **yes** |
 
-Notes from the same report: conductivity train-mean baseline on test is
+Geology moved density slightly toward naive (0.606 → 0.590) and tightened
+susceptibility / conductivity, but **did not** flip density past the
+train-mean baseline. Grade edged worse (1.309 → 1.337) while still beating
+naive by a hair.
+
+Conductivity notes (geology report): train-mean baseline on test is
 **0.953** — the net beats the floor but not train-mean. Grid μ is off the
-floor (`cond_moved_off_floor=true`). **Density still loses to naive.**
+floor (`cond_moved_off_floor=true`).
+
+### Z-resolution refinement
+
+Directional variograms on district finite-xyz samples
+(`examples/variogram_cloncurry.jl` →
+`tmp_cloncurry_variogram/cloncurry_variogram_summary.tsv`) showed grade’s
+vertical range ≈ **305 m**. Against the then-default **200 m** Z cell that
+is only **1.52×** cells — too coarse to resolve the vertical structure the
+data support. Density / susceptibility / conductivity vertical ranges are
+much longer (~1.9 km), so the coarseness argument is grade-led.
+
+| property | R_major (m) | R_minor (m) | R_vert (m) | ani maj/min | ani maj/vert | R_vert / 200 m cell |
+|---|---:|---:|---:|---:|---:|---:|
+| grade | 211406† | 127122 | **305** | 1.66 | 694 | **1.52** |
+| density | 36958 | 18286 | 1900 | 2.02 | 19.5 | 9.50 |
+| susceptibility | 36673 | 21225 | 1900 | 1.73 | 19.3 | 9.50 |
+| `conductivity_100kHz` | 211419† | 47216 | 1900 | 4.48 | 111 | 9.50 |
+
+† Horizontal range hit the fit ceiling at this maxlag; vertical grade range
+did not. A grade-only quick hold-out (40 epochs, same split) improved test
+RMSE from **1.344** (Z=200) to **1.294** (Z=100), enough to switch the
+district default to **2300 m XY × 100 m Z**.
+
+### Current score — Z = 100 m (100 epochs, resume from ep50)
+
+Source:
+`tmp_cloncurry_prior_district_holdout_w256_d4_z100/cloncurry_holdout_report.txt`
+(69 channels; grid (52, 96, 21) ≈ 105k cells @ **2300 m × 100 m**;
+`epochs=100`, `best_epoch=100`, resumed from an ep50 checkpoint).
+
+| property | test RMSE | naive | beats naive? | vs geology Z=200 |
+|---|---:|---:|---|---:|
+| grade (log10 Cu) | **1.263** | 1.339 | **yes** | 1.337 → better |
+| density | 0.600 | 0.469 | **no** | 0.590 → slightly worse |
+| susceptibility | **1.340** | 1.612 | **yes** | 1.341 ≈ same |
+| `conductivity_100kHz` | **0.914** | 1.393 (floor) | **yes** | 1.001 → better |
+
+Best weighted training loss: **0.187** at epoch 100
+(`cloncurry_holdout_loss_curve.tsv`). Cond grid fraction at floor:
+**0.036%** (`cond_grid_frac_floor`).
+
+**Density — five interventions, none beat naive (0.469):**
+
+| # | Intervention | Where | density test RMSE |
+|---|---|---|---:|
+| 1 | Capacity ↑ (256/4 vs thin EH nets) | district w256/d4 | 0.606 |
+| 2 | Capacity ↓ (64/2) | EH `…_w64_d2/` | 0.267 (still > naive 0.187) |
+| 3 | More holes (84 vs 7) | district vs EH | 0.606 |
+| 4 | Structural geology (+16 ch) | `…_geology/` | 0.590 |
+| 5 | Z refine 200 → 100 m | `…_z100/` | 0.600 |
+
+Capacity, sample count, geology, and vertical resolution each move the
+needle slightly; none close the gap to the train-mean baseline.
+
+**Technical note — resume loss spike.** After loading the ep50 checkpoint
+with `SMARTPRIOR_RESUME=1`, epoch **51** logged total loss **10.97** (from
+0.257 at ep50), then recovered (ep75 → 0.603, ep100 → 0.187). Likely cause:
+Adam optimizer state is not restored from the JLD2 checkpoint (weights /
+history only), so the first post-resume step is an untuned Adam warm-up.
+The run recovered; long resumed jobs should watch for this spike and prefer
+full restarts when comparing loss curves across seeds.
+
+### Figures — district predicted Cu
+
+Nested 2,000 / 5,000 ppm shells on a cell-centred block model; drill traces
+coloured by assay log10 Cu. Export:
+`examples/export_cloncurry_blockmodel.jl`.
+
+**Current (Z = 100 m, 100-epoch resume)** —
+`tmp_cloncurry_prior_district_holdout_w256_d4_z100/` →
+`docs/assets/cloncurry_district_z100_cu_iso.png`.
+Gold cubes = predicted Cu **block cells** (≥ 2000 ppm) on the PriorGrid;
+black tubes = drill traces (Z exaggerated ≈×10.7). Outer wireframe is a
+**square cube** (equal E/N/Z visual side ≈ 226 km). Purple–yellow spheres =
+assay log10 Cu.
+
+![Cloncurry district Z=100 m — predicted Cu blocks + drill traces](docs/assets/cloncurry_district_z100_cu_iso.png)
+
+**Geology score (Z = 200 m, 250 epochs)** —
+`tmp_cloncurry_prior_district_holdout_w256_d4_geology/` →
+`docs/assets/cloncurry_district_geology_cu_iso.png`.
+
+![Cloncurry district geology (Z=200 m) — predicted Cu + drill traces](docs/assets/cloncurry_district_geology_cu_iso.png)
 
 ### Earlier EH-only hold-out (not the district score)
 
@@ -174,13 +279,11 @@ cond all lose. Explains the move to district.
 
 From `tmp_cloncurry_prior_eh/cloncurry_prior_report.txt`: log10-RMSE
 **0.005** on 104 grade cells; predicted high/bg **19.80×** vs assay
-**19.98×**. Export: `examples/export_cloncurry_blockmodel.jl` →
-`docs/assets/cloncurry_eh_cu_iso.png`.
+**19.98×**. Export → `docs/assets/cloncurry_eh_cu_iso.png`.
 
 ![Ernest Henry D — predicted Cu isosurface (in-sample)](docs/assets/cloncurry_eh_cu_iso.png)
 
-Nested 2,000 / 5,000 ppm shells on a cell-centred block model; drill traces
-coloured by assay log10 Cu. **In-sample only.**
+**In-sample only** — not a district hold-out score.
 
 ---
 
@@ -192,9 +295,21 @@ julia --project=. -e 'using Pkg; Pkg.instantiate()'
 # Full-data train (default = district sample AABB)
 julia --project=. examples/train_cloncurry_prior.jl
 
-# District drillhole hold-out (84/18/18 of 120 named holes)
-SMARTPRIOR_WORK=tmp_cloncurry_prior_district_holdout_w256_d4 \
+# District drillhole hold-out (84/18/18 of 120 named holes; default Z=100 m)
+SMARTPRIOR_WORK=tmp_cloncurry_prior_district_holdout_w256_d4_z100 \
   julia --project=. examples/holdout_cloncurry_prior.jl
+
+# Directional variogram / anisotropy (writes tmp_cloncurry_variogram/)
+julia --project=. examples/variogram_cloncurry.jl
+
+# VTK + Cu isosurface — current district Z=100 checkpoint
+SMARTPRIOR_WORK=tmp_cloncurry_prior_district_holdout_w256_d4_z100 \
+  SMARTPRIOR_BOX=district SMARTPRIOR_WIDTH=256 SMARTPRIOR_DEPTH=4 \
+  SMARTPRIOR_CELL_M=2300 SMARTPRIOR_CELL_Z=100 \
+  SMARTPRIOR_PYTHON=$HOME/mtproject/.venv/bin/python \
+  julia --project=. examples/export_cloncurry_blockmodel.jl
+# then: cp $WORK/cloncurry_district_geology_cu_iso.png \
+#          docs/assets/cloncurry_district_z100_cu_iso.png
 
 # VTK + Cu isosurface from an EH checkpoint
 SMARTPRIOR_WORK=tmp_cloncurry_prior_eh SMARTPRIOR_BOX=ernest_henry \
@@ -224,24 +339,27 @@ Tests: `julia --project=. -e 'using Pkg; Pkg.test()'`.
 | `examples/train_cloncurry_prior.jl` | full-data train |
 | `examples/holdout_cloncurry_prior.jl` | drillhole-group hold-out |
 | `examples/export_cloncurry_blockmodel.jl` | VTK + Cu isosurface |
+| `examples/variogram_cloncurry.jl` | directional variogram + anisotropy |
 | `src/KeivitsaIO.jl` | legacy GTK readers |
 | `README_KEIVITSA_LEGACY.md` | Keivitsa experiment tables |
 | `tmp_cloncurry_prior*/` | gitignored run outputs |
+| `tmp_cloncurry_variogram/` | gitignored variogram tables |
 
 ---
 
 ## Open questions
 
-1. **Density** — on the completed district hold-out still loses to naive
-   (0.606 vs 0.469). Whether structural geology closes that gap is **not
-   known yet** (geology retrain unfinished).
+1. **Density** — still loses to naive after capacity ↑/↓, more holes,
+   structural geology, and Z=100 m (current **0.600** vs **0.469**). Not a
+   resolution or channel-count issue on the interventions tried so far.
 2. **Magnetics** — present in the METAL package; not wired. Waiting on
    explicit approval before adding channels.
-3. **`conductivity_100kHz`** — beats the −2 floor on district test, but
-   loses to train-mean (0.953). Borderline; zeros→floor and specimen vs bulk
-   remain caveats.
-4. **Geology hold-out report** — code path live (69 channels); score file
-   not written yet under `tmp_cloncurry_prior_district_holdout_w256_d4_geology/`.
+3. **`conductivity_100kHz`** — beats the −2 floor on district test (Z=100:
+   **0.914** vs floor 1.393); train-mean baseline on the Z=200 geology split
+   was **0.953**. Zeros→floor and specimen vs bulk remain caveats.
+4. **Resume Adam state** — post-resume epoch-51 loss spike (10.97) recovered
+   by epoch 100; checkpointing optimizer state is still open if long resumes
+   become routine.
 
 ---
 
