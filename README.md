@@ -263,12 +263,6 @@ assay log10 Cu.
 
 ![Cloncurry district Z=100 m — predicted Cu blocks + drill traces](docs/assets/cloncurry_district_z100_cu_iso.png)
 
-**Geology score (Z = 200 m, 250 epochs)** —
-`tmp_cloncurry_prior_district_holdout_w256_d4_geology/` →
-`docs/assets/cloncurry_district_geology_cu_iso.png`.
-
-![Cloncurry district geology (Z=200 m) — predicted Cu + drill traces](docs/assets/cloncurry_district_geology_cu_iso.png)
-
 ### Earlier EH-only hold-out (not the district score)
 
 `tmp_cloncurry_prior_eh_group_holdout/cloncurry_holdout_report.txt` —
