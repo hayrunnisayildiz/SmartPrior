@@ -49,6 +49,7 @@ export cu_log10, aggregate_to_cells, map_points_to_cells
 
 # observations and features
 export PropertySpec, SampleTable, nsamples, subset, observed_mask, training_mask
+export real_hole_mask
 export Covariate, evaluate, channel_names, evaluate_all
 export CoordinateCovariate, DepthCovariate, StructureDistance, SurfaceGeology
 export FeatureStack, PointSamples, LabelSamples
@@ -89,6 +90,7 @@ export cloncurry_geology_dir, cloncurry_structures_path, cloncurry_surface_geolo
 export load_cloncurry_structures, load_cloncurry_surface_geology
 export structure_distance_channels, surface_geology_channels
 export cloncurry_sample_table
+export cloncurry_sample_type, CLONCURRY_PLACEHOLDER_HOLE_IDS
 export CLONCURRY_PROPERTY_NAMES, CLONCURRY_GEOCHEM_ELEMENTS
 export CLONCURRY_SULFIDE_INDEX_ELEMENTS, CLONCURRY_GEOCHEM_RATIOS
 export CLONCURRY_CONDUCTIVITY_STATUS, CLONCURRY_WORK_BOUNDS

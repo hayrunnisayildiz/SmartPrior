@@ -38,15 +38,17 @@ struct PropertySpec
 end
 
 """
-    SampleTable(x, y, z, hole, group, values, censored, classes, specs)
+    SampleTable(x, y, z, hole, group, sample_type, values, censored, classes, specs)
 
 Row-aligned specimens in a projected Cartesian frame (metres).
 
 `hole` is the drillhole id and `group` is the deposit (or other hold-out
 group). Both are required on every row: an empty string or `"missing"` is
-rejected. `values` and `censored` have one entry per continuous spec;
-`classes` has one label vector per categorical spec. A censored row must
-store a finite upper bound, never NaN.
+rejected. `sample_type` is `"drillhole"` for a real collar, or a placeholder
+label such as `"Block"`, `"Core"`, `"core"`, or `"outcrop"` for rows that
+share a fake hole id. `values` and `censored` have one entry per continuous
+spec; `classes` has one label vector per categorical spec. A censored row
+must store a finite upper bound, never NaN.
 """
 struct SampleTable
     x::Vector{Float64}
@@ -54,6 +56,7 @@ struct SampleTable
     z::Vector{Float64}
     hole::Vector{String}
     group::Vector{String}
+    sample_type::Vector{String}
     values::Dict{Symbol,Vector{Float64}}
     censored::Dict{Symbol,BitVector}
     classes::Dict{Symbol,Vector{String}}
@@ -64,6 +67,7 @@ struct SampleTable
                          z::AbstractVector{<:Real},
                          hole::AbstractVector{<:AbstractString},
                          group::AbstractVector{<:AbstractString},
+                         sample_type::AbstractVector{<:AbstractString},
                          values::AbstractDict,
                          censored::AbstractDict,
                          classes::AbstractDict,
@@ -73,6 +77,7 @@ struct SampleTable
         zv = collect(Float64, z)
         hv = String.(hole)
         gv = String.(group)
+        st = String.(sample_type)
         n = length(xv)
         length(yv) == n || throw(ArgumentError(
             "SampleTable: y has $(length(yv)) rows but x has $n"))
@@ -82,9 +87,12 @@ struct SampleTable
             "SampleTable: hole has $(length(hv)) rows but x has $n"))
         length(gv) == n || throw(ArgumentError(
             "SampleTable: group has $(length(gv)) rows but x has $n"))
+        length(st) == n || throw(ArgumentError(
+            "SampleTable: sample_type has $(length(st)) rows but x has $n"))
         for i in 1:n
             _require_filled_id(hv[i], "hole", i)
             _require_filled_id(gv[i], "group", i)
+            _require_filled_id(st[i], "sample_type", i)
         end
 
         specv = collect(PropertySpec, specs)
@@ -138,7 +146,7 @@ struct SampleTable
                 "SampleTable: classes[:$(name)] has $(length(class_d[name])) rows, expected $n"))
         end
 
-        return new(xv, yv, zv, hv, gv, values_d, cens_d, class_d, specv)
+        return new(xv, yv, zv, hv, gv, st, values_d, cens_d, class_d, specv)
     end
 end
 
@@ -176,6 +184,22 @@ function training_mask(table::SampleTable)
     mask = falses(n)
     @inbounds for i in 1:n
         mask[i] = isfinite(table.x[i]) && isfinite(table.y[i]) && isfinite(table.z[i])
+    end
+    return mask
+end
+
+"""
+    real_hole_mask(table::SampleTable) -> BitVector
+
+True where `sample_type` is `"drillhole"`. Placeholder labels (`Block`,
+`Core`, `core`, `outcrop`, …) are false — those rows are not real collars
+and must not enter hole-grouped CV.
+"""
+function real_hole_mask(table::SampleTable)
+    n = nsamples(table)
+    mask = falses(n)
+    @inbounds for i in 1:n
+        mask[i] = table.sample_type[i] == "drillhole"
     end
     return mask
 end
@@ -235,7 +259,7 @@ function subset(table::SampleTable, idx::AbstractVector)
     classes = Dict{Symbol,Vector{String}}(
         k => v[ii] for (k, v) in table.classes)
     return SampleTable(table.x[ii], table.y[ii], table.z[ii],
-                       table.hole[ii], table.group[ii],
+                       table.hole[ii], table.group[ii], table.sample_type[ii],
                        values, censored, classes, table.specs)
 end
 

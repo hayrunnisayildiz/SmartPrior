@@ -839,6 +839,9 @@ Split eligible sample indices into `train`, `val`, and `test` by group id.
 
 Every sample that shares a group (a drillhole id) goes to the same split.
 Empty group ids are unique per row via [`cloncurry_group_keys`](@ref).
+Placeholder hole ids in [`CLONCURRY_PLACEHOLDER_HOLE_IDS`](@ref) (`Block`,
+`Core`, `core`, `outcrop`) are removed from the eligible set before the
+split — they are not real collars.
 
 `unit = :samples` (default) matches **sample counts** to `targets` or
 `fractions` (the Ernest Henry 191/45/19 draft is this mode with
@@ -859,9 +862,14 @@ function group_holdout(groups::AbstractVector{<:AbstractString},
     n = length(groups)
     length(eligible) == n || throw(ArgumentError(
         "group_holdout: groups and eligible must match length"))
-    cand = findall(eligible)
-    isempty(cand) && throw(ArgumentError("group_holdout: no eligible samples"))
     gkeys = cloncurry_group_keys(groups)
+    cand = Int[]
+    @inbounds for i in 1:n
+        if eligible[i] && !(gkeys[i] in CLONCURRY_PLACEHOLDER_HOLE_IDS)
+            push!(cand, i)
+        end
+    end
+    isempty(cand) && throw(ArgumentError("group_holdout: no eligible samples"))
     grp_to_idx = Dict{String,Vector{Int}}()
     for i in cand
         push!(get!(grp_to_idx, gkeys[i], Int[]), i)
@@ -1349,6 +1357,21 @@ end
 # The bound is the policy's limit (a percentile of the positive measurements,
 # their minimum, or a configured constant), chosen on the whole column.
 
+# Fake "hole" ids in the METAL petrophysics file: these label sample type,
+# not a collar. They must not form a hold-out group.
+const CLONCURRY_PLACEHOLDER_HOLE_IDS = Set(["Block", "Core", "core", "outcrop"])
+
+"""
+    cloncurry_sample_type(hole) -> String
+
+`"drillhole"` for a real collar id; otherwise the placeholder label itself
+(`Block`, `Core`, `core`, `outcrop`).
+"""
+function cloncurry_sample_type(hole::AbstractString)
+    h = strip(String(hole))
+    return h in CLONCURRY_PLACEHOLDER_HOLE_IDS ? h : "drillhole"
+end
+
 const _SAMPLE_PROPERTY_ORDER = ("cu", "density", "susceptibility", "conductivity", "lithology")
 
 function _ordered_property_names(props::AbstractDict)
@@ -1503,7 +1526,9 @@ Blank drillhole ids become `__ungrouped_<row>` and blank deposits
 `__ungrouped_deposit_<row>`, using the source-file row number, so `hole`
 and `group` are filled before an optional `deposit` filter. That filter
 keeps rows whose deposit label matches; the detection limit is chosen on
-the unfiltered column.
+the unfiltered column. Placeholder hole ids (`Block`, `Core`, `core`,
+`outcrop`) keep their string in `hole` but are tagged in `sample_type`
+and are dropped from [`group_holdout`](@ref).
 """
 function cloncurry_sample_table(root::AbstractString, cfg::AbstractDict)
     petro_path = _cfg_data_path(root, cfg, "petrophysics") do
@@ -1585,8 +1610,9 @@ function cloncurry_sample_table(root::AbstractString, cfg::AbstractDict)
 
     holes = [_filled_label(samples.drillhole[i], i, "__ungrouped_") for i in 1:n]
     groups = [_filled_label(samples.deposit[i], i, "__ungrouped_deposit_") for i in 1:n]
+    sample_types = [cloncurry_sample_type(h) for h in holes]
     table = SampleTable(samples.east, samples.north, samples.elev,
-                         holes, groups, values, censored, classes, specs)
+                         holes, groups, sample_types, values, censored, classes, specs)
     if haskey(cfg, "deposit") && !isempty(strip(String(cfg["deposit"])))
         dep = strip(String(cfg["deposit"]))
         table = subset(table, table.group .== dep)

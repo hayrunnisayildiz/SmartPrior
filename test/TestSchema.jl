@@ -1,6 +1,7 @@
 using Test
 using SmartPrior
 using Statistics
+using Random
 
 const SCHEMA_FIXTURE = joinpath(@__DIR__, "fixtures", "site_tiny.toml")
 const SCHEMA_PETRO = joinpath(@__DIR__, "fixtures", "cloncurry_petro_tiny.csv")
@@ -47,6 +48,7 @@ end
     table = SampleTable(
         [1.0, 2.0, 3.0], [0.0, 0.0, 0.0], [10.0, 11.0, 12.0],
         ["H1", "H1", "H2"], ["Ernest Henry", "Ernest Henry", "Monakoff"],
+        ["drillhole", "drillhole", "drillhole"],
         Dict(:cu => [5.0, NaN, 1.0]),
         Dict(:cu => BitVector([true, false, false])),
         Dict(:lithology => ["MSD", "", "missing"]),
@@ -55,15 +57,17 @@ end
     mask = observed_mask(table, :cu)
     @test mask == BitVector([true, false, true])
     @test observed_mask(table, :lithology) == BitVector([true, false, false])
+    @test real_hole_mask(table) == BitVector([true, true, true])
     sub = subset(table, [1, 3])
     @test nsamples(sub) == 2
     @test sub.hole == ["H1", "H2"]
+    @test sub.sample_type == ["drillhole", "drillhole"]
     @test sub.values[:cu] ≈ [5.0, 1.0]
     @test sub.censored[:cu] == BitVector([true, false])
     kept = subset(table, table.group .== "Ernest Henry")
     @test nsamples(kept) == 2
     @test_throws ArgumentError SampleTable(
-        [1.0], [0.0], [0.0], [""], ["D"],
+        [1.0], [0.0], [0.0], [""], ["D"], ["drillhole"],
         Dict(:cu => [1.0]), Dict(:cu => falses(1)),
         Dict{Symbol,Vector{String}}(),
         [PropertySpec(:cu, :continuous, :log10, "ppm")])
@@ -73,11 +77,13 @@ end
     located = SampleTable(
         [1.0, NaN, 3.0], [0.0, 1.0, Inf], [4.0, 5.0, 6.0],
         ["A", "B", "C"], ["D", "D", "D"],
+        ["drillhole", "outcrop", "drillhole"],
         Dict(:cu => [1.0, 2.0, 3.0]),
         Dict(:cu => falses(3)),
         Dict{Symbol,Vector{String}}(),
         [PropertySpec(:cu, :continuous, :log10, "ppm")])
     @test training_mask(located) == BitVector([true, false, false])
+    @test real_hole_mask(located) == BitVector([true, false, true])
 end
 
 @testset "load_site fixture returns a table and covariates" begin
@@ -226,7 +232,23 @@ end
         @test table.group[3] == "__ungrouped_deposit_3"
         @test all(s -> !isempty(strip(s)) && lowercase(strip(s)) != "missing", table.hole)
         @test all(s -> !isempty(strip(s)) && lowercase(strip(s)) != "missing", table.group)
+        @test all(==("drillhole"), table.sample_type)
     end
+end
+
+@testset "placeholder hole ids become sample_type and leave group_holdout" begin
+    @test cloncurry_sample_type("EH1") == "drillhole"
+    @test cloncurry_sample_type("Block") == "Block"
+    @test cloncurry_sample_type("core") == "core"
+    holes = ["EH1", "Block", "outcrop", "EH2", "Core"]
+    eligible = trues(5)
+    split = group_holdout(holes, eligible; unit = :groups,
+                          fractions = (0.5, 0.25, 0.25),
+                          rng = Random.Xoshiro(1))
+    all_idx = sort!(vcat(split.train, split.val, split.test))
+    @test all_idx == [1, 4]
+    @test split.n_eligible == 2
+    @test split.n_groups == 2
 end
 
 @testset "covariates at cell centres match the grid channels" begin
