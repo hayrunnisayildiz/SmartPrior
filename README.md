@@ -20,18 +20,18 @@ The MT-era package (SmartPriorMT) is archived as git tag `v0-mt-archive`.
 |---|---|
 | Active dataset | Cloncurry district sample AABB (~118 × 219 km), 120 named holes |
 | Fourth head | **`conductivity_100kHz`** — KT-20, 100 kHz, specimen-scale. **Not** MT bulk conductivity |
-| Leak-free result | District drillhole hold-out 84/18/18, `split_seed=2026`, width=256 / depth=4 |
+| Leak-free result | **Not yet.** Published district numbers used test-hole pXRF as input (see [Results](#results--district-drillhole-hold-out)) |
 | Active mesh | **2300 m XY × 100 m Z** (default; refined from 200 m Z after variogram) |
-| Density vs naive | Still loses after five independent interventions (see [Results](#results--district-drillhole-hold-out)) |
+| Density vs naive | Old leaky run still loses; needs a leak-free rerun |
 | Structural geology | Live: +16 channels → **69** total; scored under `…_w256_d4_geology/` |
 
 ---
 
 ## Why district (not Ernest Henry alone)
 
-Ernest Henry has only **11** named holes. A leak-free 7/2/2 hole split showed
-grade with a weak signal and density / susceptibility / `conductivity_100kHz`
-all losing to naive
+Ernest Henry has only **11** named holes. A 7/2/2 hole split (same old input
+construction) showed grade with a weak signal and density / susceptibility /
+`conductivity_100kHz` all losing to naive
 (`tmp_cloncurry_prior_eh_group_holdout/cloncurry_holdout_report.txt`). Shrinking
 the net (64/2) did not rescue those heads — capacity was not the bottleneck.
 
@@ -113,9 +113,9 @@ Architecture default for district hold-out: **width = 256**, **depth = 4**.
 |---|---|---|
 | `tmp_cloncurry_prior_eh/` | Ernest Henry box, **all** labels, 104 grade cells | **No** — in-sample fit |
 | `tmp_cloncurry_prior_eh_group_holdout/` | EH 7/2/2 holes | Diagnostic only — showed EH is too thin |
-| `tmp_cloncurry_prior_district_holdout_w256_d4/` | District **84/18/18**, 53 ch, Z=200 m | Leak-free; **before geology** |
-| `…_w256_d4_geology/` | Same split + geology (69 ch), Z=200 m | Leak-free geology score |
-| `…_w256_d4_z100/` | Same split + geology, **Z=100 m**, 100 epochs | **Current** district score |
+| `tmp_cloncurry_prior_district_holdout_w256_d4/` | District **84/18/18**, 53 ch, Z=200 m | Old leaky setup; before geology |
+| `…_w256_d4_geology/` | Same split + geology (69 ch), Z=200 m | Old leaky setup; geology score |
+| `…_w256_d4_z100/` | Same split + geology, **Z=100 m**, 100 epochs | Old leaky setup; finest mesh |
 
 Naive reference on district: train-mean RMSE on test holes for grade /
 density / susceptibility; conductivity **floor** (−2 = log10 0.01 S/m) for
@@ -124,6 +124,13 @@ density / susceptibility; conductivity **floor** (−2 = log10 0.01 S/m) for
 ---
 
 ## Results — district drillhole hold-out
+
+**Old setup, reference only.** These numbers come from runs that hid test-hole
+*labels* (grade / density / susceptibility / `conductivity_100kHz`) but still
+built geochemistry, lithology, and coverage channels from **every** specimen,
+including test holes. Test-hole pXRF therefore entered the feature stack. Do
+not cite them as a leak-free hold-out. A train-only-input rerun has not been
+scored yet.
 
 All rows below use the same collar split: **84 / 18 / 18** holes,
 `split_seed=2026`, samples 1,105 / 251 / 230, width=256 / depth=4.
@@ -149,7 +156,7 @@ Source:
 | susceptibility | **1.364** | 1.612 | **yes** |
 | `conductivity_100kHz` | **1.006** | 1.393 (floor) | **yes** |
 
-### Current score — Z = 100 m (100 epochs)
+### Finest mesh — Z = 100 m (100 epochs; same old setup)
 
 Source:
 `tmp_cloncurry_prior_district_holdout_w256_d4_z100/cloncurry_holdout_report.txt`
@@ -171,7 +178,7 @@ Source:
 | 4 | Structural geology | 0.590 |
 | 5 | Z refine 200 → 100 m | 0.600 |
 
-### Figures — district predicted Cu
+### Figures — district predicted Cu (same old checkpoints)
 
 ![Cloncurry district Z=100 m — predicted Cu blocks + drill traces](docs/assets/cloncurry_district_z100_cu_iso.png)
 
@@ -231,12 +238,16 @@ Tests: `julia --project=. -e 'using Pkg; Pkg.test()'`.
 
 ## Open questions
 
-1. **Density** — still loses to naive after capacity ↑/↓, more holes,
-   structural geology, and Z=100 m (current **0.600** vs **0.469**).
-2. **Magnetics** — present in the METAL package; not wired. Waiting on
+1. **Leak-free hold-out** — rebuild features from train holes only, then
+   rescore. Until then, density / grade / susceptibility / conductivity
+   numbers above are reference, not claims.
+2. **Density** — under the old leaky setup it still lost to naive after
+   capacity ↑/↓, more holes, structural geology, and Z=100 m (**0.600** vs
+   **0.469**). Revisit after the leak-free rerun.
+3. **Magnetics** — present in the METAL package; not wired. Waiting on
    explicit approval before adding channels.
-3. **`conductivity_100kHz`** — beats the −2 floor on district test (Z=100:
-   **0.914** vs floor 1.393). Zeros→floor and specimen vs bulk remain caveats.
+4. **`conductivity_100kHz`** — old leaky Z=100 run beat the −2 floor
+   (**0.914** vs 1.393). Zeros→floor and specimen vs bulk remain caveats.
 
 ---
 
