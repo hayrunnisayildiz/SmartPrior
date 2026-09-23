@@ -1,17 +1,17 @@
-# Ernest Henry, Cloncurry district (METAL / GDA94 MGA zone 54).
-# Bounds are cloncurry_deposit_bounds(samples, "Ernest Henry") on
+# Starra, Cloncurry district (METAL / GDA94 MGA zone 54).
+# Bounds are cloncurry_deposit_bounds(samples, "Starra") on
 # Cloncurry_integrated_2026-09-17, with that function's default pads
 # (50 m in x/y, 25 m in z). They frame the covariates; they do not drop rows.
 
-name = "ernest_henry"
+name = "starra"
 source = "cloncurry"
 crs = "EPSG:28354"
-deposit = "Ernest Henry"
+deposit = "Starra"
 
 [bounds]
-x = [469141.56637061, 471498.27168464]
-y = [7.7369450380151e6, 7.7442251940826e6]
-z = [-1537.5391018064, 112.447345953525]
+x = [445510, 446307.53075122001]
+y = [7602777, 7604824]
+z = [-172.11871003483, 477]
 
 # Continuous values are stored in the original unit. transform is metadata
 # for a later training step. "<LOD" and conductivity zeros are upper bounds.
@@ -76,3 +76,4 @@ length_scale = 100.0
 
 [covariates.surface_geology]
 file = "geology/surface_geology.geojson"
+

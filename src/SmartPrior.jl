@@ -48,7 +48,7 @@ export containing_cell
 export cu_log10, aggregate_to_cells, map_points_to_cells
 
 # observations and features
-export PropertySpec, SampleTable, nsamples, subset, observed_mask
+export PropertySpec, SampleTable, nsamples, subset, observed_mask, training_mask
 export Covariate, evaluate, channel_names, evaluate_all
 export CoordinateCovariate, DepthCovariate, StructureDistance, SurfaceGeology
 export FeatureStack, PointSamples, LabelSamples

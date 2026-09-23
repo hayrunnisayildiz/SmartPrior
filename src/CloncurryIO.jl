@@ -1344,10 +1344,10 @@ end
 
 #---------- SampleTable adapter ----------
 # The training path above still lifts Cu "<LOD" to 1 ppm and, at log10 time,
-# conductivity zeros to 0.01 S/m. This adapter does not. A "<LOD" token is an
-# upper bound at the detection limit (the smallest positive measurement in
-# the column when the file does not state one). A conductivity of exactly 0
-# is an upper bound at the instrument floor from the site file.
+# conductivity zeros to 0.01 S/m. This adapter does not. A "<LOD" token, and
+# a non-positive number under a data-driven limit policy, is an upper bound.
+# The bound is the policy's limit (a percentile of the positive measurements,
+# their minimum, or a configured constant), chosen on the whole column.
 
 const _SAMPLE_PROPERTY_ORDER = ("cu", "density", "susceptibility", "conductivity", "lithology")
 
@@ -1386,18 +1386,67 @@ function _spec_from_property(name::AbstractString, p::AbstractDict)
     return PropertySpec(Symbol(name), kind, transform, unit)
 end
 
+# Percentile is in percent: 1 means the 1st percentile (quantile 0.01).
+# Statistics.quantile is Hyndman–Fan type 7.
+const _DEFAULT_LOD_PERCENTILE = 1.0
+
+function _policy_limit(positive::Vector{Float64}, policy::AbstractString,
+                       p::AbstractDict, prop::Symbol)
+    isempty(positive) && throw(ArgumentError(
+        "cloncurry_sample_table: $(prop) has censored rows but no positive " *
+        "measurement to set the limit"))
+    if policy == "min_positive" || (policy == "" && prop === :susceptibility)
+        lod = minimum(positive)
+        @info "detection limit is the smallest positive measured value" property=prop lod n_positive=length(positive) column=String(get(p, "column", ""))
+        return lod
+    elseif policy == "percentile"
+        pct = haskey(p, "percentile") ? Float64(p["percentile"]) : _DEFAULT_LOD_PERCENTILE
+        (0 < pct < 100) || throw(ArgumentError(
+            "cloncurry_sample_table: percentile for $(prop) must be in (0, 100), got $pct"))
+        lod = quantile(positive, pct / 100)
+        @info "detection limit is a percentile of the positive measurements" property=prop percentile=pct lod min_positive=minimum(positive) n_positive=length(positive) column=String(get(p, "column", ""))
+        return lod
+    elseif policy == "fixed"
+        haskey(p, "lod") || throw(ArgumentError(
+            "cloncurry_sample_table: lod_policy \"fixed\" needs a lod value for $(prop)"))
+        lod = Float64(p["lod"])
+        lod > 0 || throw(ArgumentError(
+            "cloncurry_sample_table: lod for $(prop) must be positive, got $lod"))
+        @info "detection limit taken from the site file" property=prop lod column=String(get(p, "column", ""))
+        return lod
+    elseif policy == "instrument_floor"
+        floor = haskey(p, "floor") ? Float64(p["floor"]) : CLONCURRY_COND_FLOOR_S_M
+        floor > 0 || throw(ArgumentError(
+            "cloncurry_sample_table: instrument floor for $(prop) must be positive, got $floor"))
+        @info "exact zeros stored at the instrument floor and marked censored" property=prop floor column=String(get(p, "column", ""))
+        return floor
+    else
+        throw(ArgumentError(
+            "cloncurry_sample_table: unknown lod_policy $(repr(policy)) for $(prop). " *
+            "Use percentile, min_positive, fixed, or instrument_floor"))
+    end
+end
+
 function _continuous_column(raw::Vector{String}, prop::Symbol, p::AbstractDict)
     policy = haskey(p, "lod_policy") ? strip(String(p["lod_policy"])) : ""
+    if prop === :susceptibility && !isempty(policy) && policy != "min_positive"
+        throw(ArgumentError(
+            "cloncurry_sample_table: non-positive susceptibility is censored at " *
+            "the smallest positive value; lod_policy must be \"min_positive\" or omitted"))
+    end
     n = length(raw)
     values = fill(NaN, n)
     cens = falses(n)
     positive = Float64[]
+    n_nonpositive = 0
+    data_limit = policy in ("min_positive", "percentile", "instrument_floor") ||
+                 prop === :susceptibility
     for i in 1:n
         t = strip(raw[i])
         if isempty(t)
             continue
         elseif _is_lod(t)
-            if isempty(policy)
+            if !data_limit && policy != "fixed"
                 throw(ArgumentError(
                     "cloncurry_sample_table: $(prop) row $i is a detection-limit " *
                     "token but the property has no lod_policy"))
@@ -1405,46 +1454,34 @@ function _continuous_column(raw::Vector{String}, prop::Symbol, p::AbstractDict)
             cens[i] = true
         else
             v = _parse_float(t)
-            if !isfinite(v)
-                continue
-            elseif policy == "instrument_floor" && v == 0
+            isfinite(v) || continue
+            # Susceptibility: every finite ≤ 0 is an upper bound.
+            # Other columns: ≤ 0 is an upper bound under a data-driven policy;
+            # instrument_floor censors exact zeros only.
+            nonpos = if prop === :susceptibility
+                v <= 0
+            elseif policy == "instrument_floor"
+                v == 0
+            elseif policy in ("min_positive", "percentile")
+                v <= 0
+            else
+                false
+            end
+            if nonpos
                 cens[i] = true
+                n_nonpositive += 1
             else
                 values[i] = v
                 v > 0 && push!(positive, v)
             end
         end
     end
-    if isempty(policy)
-        return values, cens
-    elseif policy == "min_positive"
-        if any(cens)
-            isempty(positive) && throw(ArgumentError(
-                "cloncurry_sample_table: $(prop) has censored rows but no positive " *
-                "measurement to use as the detection limit"))
-            lod = minimum(positive)
-            @info "detection limit is not in the file; using the smallest positive measured value" property=prop lod n_positive=length(positive) n_censored=count(cens) column=String(get(p, "column", ""))
-            values[cens] .= lod
-        end
-    elseif policy == "fixed"
-        haskey(p, "lod") || throw(ArgumentError(
-            "cloncurry_sample_table: lod_policy \"fixed\" needs a lod value for $(prop)"))
-        lod = Float64(p["lod"])
-        lod > 0 || throw(ArgumentError(
-            "cloncurry_sample_table: lod for $(prop) must be positive, got $lod"))
-        @info "detection limit taken from the site file" property=prop lod n_censored=count(cens)
-        values[cens] .= lod
-    elseif policy == "instrument_floor"
-        floor = haskey(p, "floor") ? Float64(p["floor"]) : CLONCURRY_COND_FLOOR_S_M
-        floor > 0 || throw(ArgumentError(
-            "cloncurry_sample_table: instrument floor for $(prop) must be positive, got $floor"))
-        @info "exact zeros stored at the instrument floor and marked censored" property=prop floor n_censored=count(cens) column=String(get(p, "column", ""))
-        values[cens] .= floor
-    else
-        throw(ArgumentError(
-            "cloncurry_sample_table: unknown lod_policy $(repr(policy)) for $(prop). " *
-            "Use min_positive, fixed, or instrument_floor"))
+    if prop === :susceptibility && n_nonpositive > 0
+        @info "non-positive susceptibility marked censored" property=prop n_nonpositive n_positive=length(positive) column=String(get(p, "column", ""))
     end
+    any(cens) || return values, cens
+    lod = _policy_limit(positive, isempty(policy) ? "min_positive" : policy, p, prop)
+    values[cens] .= lod
     return values, cens
 end
 
@@ -1454,13 +1491,13 @@ end
 Cloncurry petrophysics + pXRF rows as a [`SampleTable`](@ref).
 
 `cfg` is a parsed site file. Continuous numbers stay in the file's unit
-(`PropertySpec.transform` is not applied). Cu `"<LOD"` is stored as the
-detection limit with `censored[:cu] = true`: the limit is `lod` when
-`lod_policy = "fixed"`, otherwise the smallest positive measured value in
-the whole column (logged; the historical 1 ppm substitution is not used).
-`conductivity_mean_S_m_100kHz == 0` is stored as the instrument floor
-(`floor` in the property, default [`CLONCURRY_COND_FLOOR_S_M`](@ref)) with
-`censored[:conductivity] = true`.
+(`PropertySpec.transform` is not applied). Cu `"<LOD"` and a conductivity of
+exactly 0 are upper bounds (`censored = true`). The bound is the column's
+`lod_policy` on the unfiltered file: `"percentile"` (default 1, the 1st
+percentile of positive values), `"min_positive"`, `"fixed"` (`lod`), or
+`"instrument_floor"` (`floor`). Finite susceptibility ≤ 0 is an upper bound
+at the smallest positive susceptibility. The historical 1 ppm / 0.01 S/m
+substitutions are not used unless the site file asks for them.
 
 Blank drillhole ids become `__ungrouped_<row>` and blank deposits
 `__ungrouped_deposit_<row>`, using the source-file row number, so `hole`

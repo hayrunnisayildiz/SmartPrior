@@ -57,34 +57,81 @@ function evaluate(c::CoordinateCovariate, xyz::AbstractMatrix{<:Real})
 end
 
 """
-    DepthCovariate(z_datum, d0, rho_ref, period_max)
+    DepthCovariate(z_datum, d0, rho_ref, period_max, log_mean, log_std)
+    DepthCovariate(z_datum, z_max, d0, rho_ref, period_max)
+    DepthCovariate(g::PriorGrid; rho_ref=100, period_max=1000)
 
-`log_depth` and `depth_over_skin`, matching [`depth_channels`](@ref).
+`log_depth` and `depth_over_skin`. `depth_over_skin` divides height above
+`z_datum` by the skin depth of a `rho_ref` half-space at `period_max` (a
+geometric scale, not an MT input).
 
-`z_datum` is the grid's first z edge (`g.z[1]` in [`depth_below_top`](@ref)),
-and `d0` is half the first cell thickness (`g.dz[1] / 2`). `log_depth` is
-standardised over the points passed to [`evaluate`](@ref), so it matches the
-grid channel only when those points are the cell centres. `depth_over_skin`
-uses the skin depth of a `rho_ref` half-space at `period_max` as a geometric
-scale; it is not an MT input.
+`log_depth` is `log10(max(d, d0) / d0)` shifted by `log_mean` and `log_std`.
+Those two numbers are fixed when the covariate is built and are not
+recomputed from the points passed to [`evaluate`](@ref).
+
+- From a [`PriorGrid`](@ref): the moments are `mean` and `std` of that raw
+  value on every cell centre, the same population [`depth_channels`](@ref)
+  standardises.
+- From a vertical box `[z_datum, z_max]`: the moments are those of one
+  column of cell centres filling the box with nominal thickness `2 * d0`
+  (`nz` rounded as in [`cloncurry_grid`](@ref)).
+- `log_mean` and `log_std` may instead be supplied directly (the site file).
 """
 struct DepthCovariate <: Covariate
     z_datum::Float64
     d0::Float64
     rho_ref::Float64
     period_max::Float64
+    log_mean::Float64
+    log_std::Float64
 
-    function DepthCovariate(z_datum::Real, d0::Real, rho_ref::Real, period_max::Real)
+    function DepthCovariate(z_datum::Real, d0::Real, rho_ref::Real, period_max::Real,
+                            log_mean::Real, log_std::Real)
         d0 > 0 || throw(ArgumentError("DepthCovariate: d0 must be positive"))
         rho_ref > 0 || throw(ArgumentError("DepthCovariate: rho_ref must be positive"))
         period_max > 0 || throw(ArgumentError(
             "DepthCovariate: period_max must be positive"))
-        return new(Float64(z_datum), Float64(d0), Float64(rho_ref), Float64(period_max))
+        isfinite(log_mean) || throw(ArgumentError(
+            "DepthCovariate: log_mean must be finite"))
+        (isfinite(log_std) && log_std >= 0) || throw(ArgumentError(
+            "DepthCovariate: log_std must be finite and ≥ 0"))
+        return new(Float64(z_datum), Float64(d0), Float64(rho_ref), Float64(period_max),
+                   Float64(log_mean), Float64(log_std))
     end
 end
 
+function _box_log_depth_moments(z_datum::Real, z_max::Real, d0::Real)
+    span = Float64(z_max - z_datum)
+    span > 0 || throw(ArgumentError(
+        "DepthCovariate: z_max must be greater than z_datum"))
+    d0 > 0 || throw(ArgumentError("DepthCovariate: d0 must be positive"))
+    cell_z = 2 * Float64(d0)
+    nz = max(1, round(Int, span / cell_z))
+    dz = span / nz
+    raw = Vector{Float64}(undef, nz)
+    for k in 1:nz
+        d = (k - 0.5) * dz
+        raw[k] = log10(max(d, Float64(d0)) / Float64(d0))
+    end
+    μ = mean(raw)
+    σ = nz == 1 ? 0.0 : std(raw)
+    isfinite(σ) && σ > 0 || (σ = 0.0)
+    return μ, σ
+end
+
+function DepthCovariate(z_datum::Real, z_max::Real, d0::Real,
+                        rho_ref::Real, period_max::Real)
+    μ, σ = _box_log_depth_moments(z_datum, z_max, d0)
+    return DepthCovariate(z_datum, d0, rho_ref, period_max, μ, σ)
+end
+
 function DepthCovariate(g::PriorGrid; rho_ref::Real = 100.0, period_max::Real = 1000.0)
-    return DepthCovariate(g.z[1], g.dz[1] / 2, rho_ref, period_max)
+    d0 = g.dz[1] / 2
+    raw = log10.(max.(depth_below_top(g), d0) ./ d0)
+    μ = mean(raw)
+    σ = std(raw)
+    isfinite(σ) && σ > 0 || (σ = 0.0)
+    return DepthCovariate(g.z[1], d0, rho_ref, period_max, μ, σ)
 end
 
 channel_names(::DepthCovariate) = ["log_depth", "depth_over_skin"]
@@ -94,10 +141,13 @@ function evaluate(c::DepthCovariate, xyz::AbstractMatrix{<:Real})
     n = size(pts, 2)
     out = Matrix{Float64}(undef, 2, n)
     n == 0 && return out
-    # Same expression as depth_channels: height above the first z edge, floored
-    # at d0 before the log, then standardised across these points.
     d = vec(pts[3, :]) .- c.z_datum
-    out[1, :] .= standardize(log10.(max.(d, c.d0) ./ c.d0))
+    raw = log10.(max.(d, c.d0) ./ c.d0)
+    if c.log_std > 0
+        out[1, :] .= (raw .- c.log_mean) ./ c.log_std
+    else
+        out[1, :] .= 0.0
+    end
     δ = _skin_depth(c.rho_ref, c.period_max)
     out[2, :] .= d ./ δ
     return out

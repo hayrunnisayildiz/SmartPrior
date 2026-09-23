@@ -1,5 +1,6 @@
 using Test
 using SmartPrior
+using Statistics
 
 const SCHEMA_FIXTURE = joinpath(@__DIR__, "fixtures", "site_tiny.toml")
 const SCHEMA_PETRO = joinpath(@__DIR__, "fixtures", "cloncurry_petro_tiny.csv")
@@ -68,6 +69,15 @@ end
         [PropertySpec(:cu, :continuous, :log10, "ppm")])
     @test_throws ArgumentError PropertySpec(:cu, :ordinal, :log10, "ppm")
     @test_throws ArgumentError PropertySpec(:cu, :continuous, :sqrt, "ppm")
+
+    located = SampleTable(
+        [1.0, NaN, 3.0], [0.0, 1.0, Inf], [4.0, 5.0, 6.0],
+        ["A", "B", "C"], ["D", "D", "D"],
+        Dict(:cu => [1.0, 2.0, 3.0]),
+        Dict(:cu => falses(3)),
+        Dict{Symbol,Vector{String}}(),
+        [PropertySpec(:cu, :continuous, :log10, "ppm")])
+    @test training_mask(located) == BitVector([true, false, false])
 end
 
 @testset "load_site fixture returns a table and covariates" begin
@@ -102,18 +112,85 @@ end
     @test n_lod == count(table.censored[:cu])
     @test n_zero == count(table.censored[:conductivity])
 
-    # The stored Cu bound is the smallest positive assay, not the old 1 ppm fill.
-    observed = observed_mask(table, :cu)
-    positive = table.values[:cu][observed .& .!table.censored[:cu]]
-    @test all(v -> v ≈ minimum(positive), table.values[:cu][table.censored[:cu]])
-    @test minimum(positive) != CLONCURRY_CU_DL_PPM
+    cu_pct = Float64(cfg["properties"]["cu"]["percentile"]) / 100
+    cu_pos = table.values[:cu][observed_mask(table, :cu) .& .!table.censored[:cu]]
+    cu_lim = quantile(cu_pos, cu_pct)
+    @test all(v -> v ≈ cu_lim, table.values[:cu][table.censored[:cu]])
+    @test cu_lim != CLONCURRY_CU_DL_PPM
 
-    floor = Float64(cfg["properties"]["conductivity"]["floor"])
-    @test all(v -> v ≈ floor, table.values[:conductivity][table.censored[:conductivity]])
+    cond_pct = Float64(cfg["properties"]["conductivity"]["percentile"]) / 100
+    cond_pos = table.values[:conductivity][observed_mask(table, :conductivity) .&
+                                           .!table.censored[:conductivity]]
+    cond_lim = quantile(cond_pos, cond_pct)
+    @test all(v -> v ≈ cond_lim, table.values[:conductivity][table.censored[:conductivity]])
+    @test cond_lim != CLONCURRY_COND_FLOOR_S_M
     @test isnan(table.values[:cu][3])
     @test isnan(table.values[:conductivity][3])
     @test observed_mask(table, :cu)[2]
     @test !observed_mask(table, :lithology)[2]
+end
+
+@testset "percentile limit is not the minimum, and it is read from config" begin
+    props = Dict{String,Any}(
+        "cu" => Dict{String,Any}(
+            "column" => "Cu_Concentration", "kind" => "continuous",
+            "transform" => "log10", "lod_policy" => "percentile",
+            "percentile" => 50.0, "unit" => "ppm"),
+        "conductivity" => Dict{String,Any}(
+            "column" => "conductivity_mean_S_m_100kHz", "kind" => "continuous",
+            "transform" => "log10", "lod_policy" => "percentile",
+            "unit" => "S/m"),
+    )
+    root = joinpath(@__DIR__, "fixtures")
+    wide = cloncurry_sample_table(root, Dict{String,Any}(
+        "petrophysics" => "cloncurry_petro_tiny.csv",
+        "metals" => "cloncurry_metal_tiny.csv",
+        "properties" => props))
+    cu_pos = wide.values[:cu][.!wide.censored[:cu] .& isfinite.(wide.values[:cu])]
+    cu_lim = only(unique(wide.values[:cu][wide.censored[:cu]]))
+    @test cu_lim ≈ quantile(cu_pos, 0.50)
+    @test cu_lim > minimum(cu_pos)
+    # omitted percentile falls back to 1 (the 1st percentile)
+    cond_pos = wide.values[:conductivity][.!wide.censored[:conductivity] .&
+                                          isfinite.(wide.values[:conductivity])]
+    cond_lim = only(unique(wide.values[:conductivity][wide.censored[:conductivity]]))
+    @test cond_lim ≈ quantile(cond_pos, 0.01)
+    @test cond_lim != CLONCURRY_COND_FLOOR_S_M
+end
+
+@testset "non-positive susceptibility is an upper bound" begin
+    mktempdir() do tmp
+        lines = readlines(SCHEMA_PETRO)
+        # susceptibility is column 10. S1 → 0, S4 → -0.01; positives remain.
+        for (lineno, replacement) in ((2, "0"), (5, "-0.01"))
+            row = split(lines[lineno], ',')
+            row[10] = replacement
+            lines[lineno] = join(row, ',')
+        end
+        open(joinpath(tmp, "petro.csv"), "w") do io
+            for line in lines
+                println(io, line)
+            end
+        end
+        cp(SCHEMA_METAL, joinpath(tmp, "metal.csv"))
+        table = cloncurry_sample_table(tmp, Dict{String,Any}(
+            "petrophysics" => "petro.csv",
+            "metals" => "metal.csv",
+            "properties" => Dict{String,Any}(
+                "susceptibility" => Dict{String,Any}(
+                    "column" => "susceptibility_mean_SI",
+                    "kind" => "continuous",
+                    "transform" => "log10",
+                    "lod_policy" => "min_positive",
+                    "unit" => "SI"),
+            )))
+        pos = table.values[:susceptibility][.!table.censored[:susceptibility] .&
+                                            isfinite.(table.values[:susceptibility])]
+        @test count(table.censored[:susceptibility]) == 2
+        @test all(v -> v ≈ minimum(pos),
+                  table.values[:susceptibility][table.censored[:susceptibility]])
+        @test minimum(pos) ≈ 0.05
+    end
 end
 
 @testset "blank drillhole and deposit ids are filled" begin
@@ -158,10 +235,16 @@ end
                   origin = [-1550.0, -1100.0, 0.0])
     xyz = _cell_centre_xyz(g)
     stack = build_features(g; coordinates = true)
-    M, names = evaluate_all([CoordinateCovariate(g), DepthCovariate(g)], xyz)
+    # log_depth moments are frozen from this grid's cell centres, the same
+    # population depth_channels standardises. evaluate must not recompute them.
+    coords = CoordinateCovariate(g)
+    depth = DepthCovariate(g)
+    M, names = evaluate_all([coords, depth], xyz)
     @test names == stack.names
     Fm = feature_matrix(stack)
     @test _maxabs(M, Fm) <= 1e-10
+    @test evaluate(coords, xyz[:, 1:10]) ≈ evaluate(coords, xyz)[:, 1:10] atol = 1e-10
+    @test evaluate(depth, xyz[:, 1:10]) ≈ evaluate(depth, xyz)[:, 1:10] atol = 1e-10
 
     lines = load_cloncurry_structures(SCHEMA_STRUCTURES)
     polys = load_cloncurry_surface_geology(SCHEMA_SURFACE)
@@ -191,6 +274,7 @@ end
     for k in eachindex(nold)
         @test _maxabs(sm[k, :], vec(sold[k])) <= 1e-10
     end
+    @test evaluate(snew, xyz_g[:, 1:10]) ≈ evaluate(snew, xyz_g)[:, 1:10] atol = 1e-10
 
     uold, uold_n = surface_geology_channels(geo, polys)
     unew = SurfaceGeology(polys)
@@ -199,6 +283,7 @@ end
     for k in eachindex(uold_n)
         @test _maxabs(um[k, :], vec(uold[k])) <= 1e-10
     end
+    @test evaluate(unew, xyz_g[:, 1:10]) ≈ evaluate(unew, xyz_g)[:, 1:10] atol = 1e-10
 end
 
 @testset "pXRF, lithology, and sample distance are not covariates" begin

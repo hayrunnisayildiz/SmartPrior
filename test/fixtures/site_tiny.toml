@@ -14,7 +14,8 @@ z = [-50.0, 0.0]
 column = "Cu_Concentration"
 kind = "continuous"
 transform = "log10"
-lod_policy = "min_positive"
+lod_policy = "percentile"
+percentile = 1.0
 unit = "ppm"
 
 [properties.density]
@@ -27,14 +28,15 @@ unit = "g/cm3"
 column = "susceptibility_mean_SI"
 kind = "continuous"
 transform = "log10"
+lod_policy = "min_positive"
 unit = "SI"
 
 [properties.conductivity]
 column = "conductivity_mean_S_m_100kHz"
 kind = "continuous"
 transform = "log10"
-lod_policy = "instrument_floor"
-floor = 0.01
+lod_policy = "percentile"
+percentile = 1.0
 unit = "S/m"
 
 [properties.lithology]

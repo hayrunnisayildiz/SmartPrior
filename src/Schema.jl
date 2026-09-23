@@ -166,6 +166,21 @@ function _find_spec(table::SampleTable, prop::Symbol)
 end
 
 """
+    training_mask(table::SampleTable) -> BitVector
+
+True on rows whose `(x, y, z)` are all finite. A row with a missing
+coordinate is not a training location; it stays in the table.
+"""
+function training_mask(table::SampleTable)
+    n = nsamples(table)
+    mask = falses(n)
+    @inbounds for i in 1:n
+        mask[i] = isfinite(table.x[i]) && isfinite(table.y[i]) && isfinite(table.z[i])
+    end
+    return mask
+end
+
+"""
     observed_mask(table, prop) -> BitVector
 
 True where `prop` was measured. Censored continuous values count as observed

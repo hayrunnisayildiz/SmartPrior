@@ -111,7 +111,17 @@ function _site_covariates(cfg, root::AbstractString)
             period = Float64(get(depth_cfg, "period_max", 1000.0))
             d0 = _required_number(depth_cfg, "d0",
                                   "covariates.depth.d0 (half the reference cell thickness)")
-            push!(covs, DepthCovariate(zlo, d0, rho, period))
+            has_mean = haskey(depth_cfg, "log_mean")
+            has_std = haskey(depth_cfg, "log_std")
+            if has_mean || has_std
+                (has_mean && has_std) || throw(ArgumentError(
+                    "load_site: covariates.depth.log_mean and log_std must be set together"))
+                push!(covs, DepthCovariate(zlo, d0, rho, period,
+                                           Float64(depth_cfg["log_mean"]),
+                                           Float64(depth_cfg["log_std"])))
+            else
+                push!(covs, DepthCovariate(zlo, zhi, d0, rho, period))
+            end
         elseif name == "structure_distance"
             haskey(struct_cfg, "file") || throw(ArgumentError(
                 "load_site: missing covariates.structure_distance.file"))
