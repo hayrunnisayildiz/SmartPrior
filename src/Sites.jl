@@ -24,8 +24,9 @@ function load_site(path::AbstractString)
     crs == "EPSG:28354" || throw(ArgumentError(
         "load_site: expected crs \"EPSG:28354\", got $(repr(crs))"))
     root = _site_root(cfg, path)
-    table = cloncurry_sample_table(root, cfg)
+    # Reject a covariate list before touching the assay files.
     covs = _site_covariates(cfg, root)
+    table = cloncurry_sample_table(root, cfg)
     return table, covs, cfg
 end
 

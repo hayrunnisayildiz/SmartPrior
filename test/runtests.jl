@@ -9,4 +9,5 @@ using SmartPrior
     include("TestTrain.jl")
     include("TestMetrics.jl")
     include("TestCloncurryIO.jl")
+    include("TestSchema.jl")
 end
