@@ -143,11 +143,13 @@ Assay `KKJ_NORTH`, `KKJ_EAST`, and `Z` equal the collar on all 289 holes and do 
 - Cu for the sample table is 511P only, unit ppm. Censoring is the `CU_L` flag, not a negative value and not “every result ≤ 1 ppm”.
 - Geophysical XYZ files use the same zone-3 magnitudes, with easting in the first coordinate column. That is the same CRS, not a second one.
 
-## Questions before Stage 1
+## Decisions after Stage 0
 
-1. Azimuth: is `Suunta` / `AZIMUTH` clockwise from KKJ grid north? The drilling note does not say, and the many exact 0/90/180/270 values do not fix the sense of rotation.
-2. Elevation datum of `Z`: the note describes how the collar was levelled and the years are 1984–1995, but it never names N60 or N2000.
-3. The eight 511P holes with `Z = 0` listed in §e. Drop them, or is there an elevation source I should use?
-4. Does `POS_ACCUR = 99` (26 collars, 20 with 511P) mean the collar is invalid?
-5. `CU_L = "!"` (17 rows, including 9 zeros): treat it as below detection, same as `"<"`, or as something else?
-6. `PTR_*` and `DSR_*`: please confirm both trios are density (`*_D`, kg/m³) and susceptibility (`*_K`, 10⁻⁶ SI), and which set is core versus a downhole log. The files and the drilling note do not define the prefixes. They are on disjoint holes, so they are not two measurements of one hole.
+These were confirmed against the GTK package and are the rules for the adapter. [`desurvey`](../src/Desurvey.jl) itself stays site-agnostic: azimuth clockwise from north, dip sign chosen by `dip_down_negative`.
+
+1. `Suunta` is clockwise from KKJ grid north (compass). Treated as grid north, not magnetic. A few degrees of grid-versus-magnetic offset are not resolved. Stage 4 repeats the cross-hole Cu check and writes it under `tmp_keivitsa_inspect/`.
+2. `Z` is metres above sea level, assumed N60. The ground-gravity note in this package states Finnish N60 elevations, and the N60 to N2000 shift is a few decimetres. The site file will record `vertical_datum = "N60 (assumed)"`.
+3. Drop the eight 511P holes with `Z = 0` and log the exclusion. They are the short vertical holes listed in §e. All 133 collars with `Z = 0` are location-accuracy class 10 in `reiat.txt` (`Sijaintitark`): no surveyed elevation.
+4. `POS_ACCUR = 99` means unknown accuracy, not an invalid collar. Keep the flag. Site bounds follow the main deposit drilling, so these 1992 holes (and the `Z = 0` holes) do not stretch the coordinate box. Report how many 511P samples the bounds remove.
+5. `CU_L = "!"` is left-censored, the same as `"<"`. Both sit at or below the documented 1 ppm Cu detection limit. Do not use Cloncurry's percentile rule for Keivitsa Cu: the site file will use `lod_policy = "fixed"` with `limit = 1.0` ppm. Cloncurry's percentile policy stays as it is.
+6. `PTR_*` and `DSR_*` are both core measurements from two campaigns (1987–93 and 1993–94), not downhole logs. Pool them into one density and one susceptibility. Keep the source label as a categorical field, never a covariate. Density `*_D` is kg/m³. Susceptibility `*_K` is 10⁻⁶ SI (GTK convention, inferred: not written in these files). `*_J` is remanence and is unused. `LUO_R` is the downhole resistivity sounding; ignore it for now.

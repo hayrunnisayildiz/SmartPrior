@@ -10,5 +10,6 @@ using SmartPrior
     include("TestMetrics.jl")
     include("TestCloncurryIO.jl")
     include("TestSchema.jl")
+    include("TestDesurvey.jl")
     include("TestSyntheticFields.jl")
 end
