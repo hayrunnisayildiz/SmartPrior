@@ -34,6 +34,7 @@ include("Grid.jl")
 include("Features.jl")
 include("Schema.jl")
 include("Covariates.jl")
+include("SyntheticFields.jl")
 include("CloncurryIO.jl")
 include("Sites.jl")
 include("PriorNet.jl")
@@ -98,5 +99,8 @@ export CLONCURRY_CU_DL_PPM, CLONCURRY_COND_FLOOR_S_M
 
 # site files
 export load_site
+
+# synthetic fields
+export GaussianField, gaussian_field, latent_field, smooth_field, SYNTHETIC_RFF_M
 
 end # module
