@@ -28,12 +28,14 @@ import Zygote
 
 using ArchGDAL
 using CodecZlib
+using TOML
 
 include("Grid.jl")
 include("Features.jl")
 include("Schema.jl")
 include("Covariates.jl")
 include("CloncurryIO.jl")
+include("Sites.jl")
 include("PriorNet.jl")
 include("Losses.jl")
 include("Train.jl")
@@ -90,5 +92,8 @@ export CLONCURRY_PROPERTY_NAMES, CLONCURRY_GEOCHEM_ELEMENTS
 export CLONCURRY_SULFIDE_INDEX_ELEMENTS, CLONCURRY_GEOCHEM_RATIOS
 export CLONCURRY_CONDUCTIVITY_STATUS, CLONCURRY_WORK_BOUNDS
 export CLONCURRY_CU_DL_PPM, CLONCURRY_COND_FLOOR_S_M
+
+# site files
+export load_site
 
 end # module
