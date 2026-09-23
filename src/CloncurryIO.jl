@@ -1,28 +1,23 @@
-# Cloncurry–Ernest Henry (METAL / GDA94 MGA zone 54) readers for the
-# non-geophysical prior line. Gravity, magnetics and MT are not opened here
-# even though they sit in the same package; the network sees pXRF geochemistry,
-# lithology, and structural geology (fault/line distance + surface-map
-# one-hots) as features, and Cu plus petrophysics as anchors.
+# Cloncurry–Ernest Henry (METAL / GDA94 MGA zone 54) readers.
+# Gravity, magnetics and MT are not opened here even though they sit in the
+# same data package; the network sees pXRF geochemistry and lithology as
+# features, and Cu plus petrophysics as anchors.
 #
-# Coordinate convention matches KeivitsaIO: x = easting, y = northing,
-# z = elevation (positive up, metres ASL). EPSG:28354.
+# Coordinate convention: x = easting, y = northing, z = elevation (positive
+# up, metres ASL). EPSG:28354.
 
 # pXRF *_Concentration columns from Mg to U. Cu is the grade *target* and is
-# excluded from the feature list (same leakage rule as Keivitsa drill Cu).
+# excluded from the feature list.
 # LE_Concentration is a light-element composite, not an element, and is dropped.
 const CLONCURRY_GEOCHEM_ELEMENTS = (
     "Mg", "Al", "Si", "P", "S", "K", "Ca", "Ti", "V", "Cr", "Mn", "Fe", "Co",
     "Ni", "Zn", "As", "Se", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Ag", "Cd",
     "Sn", "Sb", "W", "Hg", "Pb", "Bi", "Th", "U",
 )
-# Multi-element sulfide endowment (ppm). Geometric mean equalises Fe (~wt%)
-# vs S/Zn/Pb (ppm); a raw sum is Fe-dominated. Cu is the grade target and is
-# never included (same leakage rule as raw geochem). Literature proxy for
-# sulfide density / conductivity association in IOCG–sulfide systems.
 const CLONCURRY_SULFIDE_INDEX_ELEMENTS = ("S", "Fe", "Zn", "Pb")
-# Cloncurry pathfinders (Keivitsa-style num/den). Ni/Cu and Pd/Ni are not
-# available: Cu is held out, Pd is absent from the pXRF suite. Fe/S tracks
-# oxide vs sulfide iron; As/S and Zn/Pb are district base-metal pathfinders.
+# Pathfinders. Ni/Cu and Pd/Ni are not available: Cu is held out, Pd is
+# absent from the pXRF suite. Fe/S tracks oxide vs sulfide iron; As/S and
+# Zn/Pb are district base-metal pathfinders.
 const CLONCURRY_GEOCHEM_RATIOS = (("As", "S"), ("Zn", "Pb"), ("Fe", "S"))
 const CLONCURRY_CU_DL_PPM = 1.0
 # KT-20 100 kHz specimen conductivity. 711 / 1250 finite values are exact 0;
@@ -74,6 +69,30 @@ end
 Base.length(s::CloncurrySamples) = length(s.sample)
 
 #---------- csv / gzip ----------
+
+function _parse_float(s::AbstractString)
+    t = strip(s)
+    isempty(t) && return NaN
+    v = tryparse(Float64, t)
+    return v === nothing ? NaN : v
+end
+
+function _split_csv_line(line::AbstractString)
+    fields = String[]
+    buf = IOBuffer()
+    in_quote = false
+    for c in line
+        if c == '"'
+            in_quote = !in_quote
+        elseif c == ',' && !in_quote
+            push!(fields, String(take!(buf)))
+        else
+            write(buf, c)
+        end
+    end
+    push!(fields, String(take!(buf)))
+    return fields
+end
 
 function _with_text(f, path::AbstractString)
     isfile(path) || throw(ArgumentError("CloncurryIO: no such file: $path"))

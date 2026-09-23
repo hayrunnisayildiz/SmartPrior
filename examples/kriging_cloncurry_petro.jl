@@ -1,14 +1,10 @@
 # Ordinary-kriging baseline via GeoStats.jl (density & log10 susceptibility).
 #
-# GeoStats cannot live in the main SmartPriorMT Project.toml — it needs Meshes
-# ≥0.57, which conflicts with MTGeophysics → CairoMakie → Makie 0.23. It is
-# installed in examples/kriging_env/ (GeoStats 0.90.1).
-#
 # This script (main --project=.):
 #   1. Loads today's variogram summary + recovers major-axis nugget / sill
 #   2. Rebuilds the Z=100 m drillhole hold-out (split_seed=2026, 84/18/18)
 #   3. Writes train/test point TSVs (property values only — no geochem/lith)
-#   4. Shells out to examples/kriging_env for GeoStats OrdinaryKriging
+#   4. Runs examples/kriging_env/run_ordinary_kriging.jl under the main project
 #
 # Run:
 #   julia --project=. examples/kriging_cloncurry_petro.jl
@@ -16,8 +12,7 @@
 # Env: CLONCURRY_ROOT, SMARTPRIOR_WORK, SMARTPRIOR_SPLIT_SEED,
 #      SMARTPRIOR_VARIO_TSV, SMARTPRIOR_CELL_M, SMARTPRIOR_CELL_Z
 
-using SmartPriorMT
-using LsqFit
+using SmartPrior
 using Printf
 using Random
 using Statistics
@@ -77,6 +72,44 @@ end
 spherical_model(h, p) = spherical_gamma.(h, p[1], p[2], p[3])
 exponential_model(h, p) = exponential_gamma.(h, p[1], p[2], p[3])
 
+function fit_bounded(model, x, y, p0; lower, upper, n_restarts = 8)
+    lo = collect(Float64, lower)
+    hi = collect(Float64, upper)
+    best_p = clamp.(collect(Float64, p0), lo, hi)
+    best_s = sum(abs2, model(x, best_p) .- y)
+    spans = hi .- lo
+    rng = Xoshiro(1)
+    for k in 0:n_restarts
+        p = k == 0 ? copy(best_p) : clamp.(lo .+ rand(rng, 3) .* spans, lo, hi)
+        step = 0.25
+        for _ in 1:80
+            improved = false
+            for j in 1:3
+                for s in (-step, step)
+                    cand = copy(p)
+                    cand[j] = j == 1 ?
+                        clamp(cand[j] * exp(s), lo[j], hi[j]) :
+                        clamp(cand[j] * (1 + s), lo[j], hi[j])
+                    ss = sum(abs2, model(x, cand) .- y)
+                    if ss + 1e-15 < best_s
+                        best_s = ss
+                        p = cand
+                        improved = true
+                    end
+                end
+            end
+            improved || (step *= 0.5)
+            step < 1e-4 && break
+        end
+        ss = sum(abs2, model(x, p) .- y)
+        if ss < best_s
+            best_s = ss
+            best_p = copy(p)
+        end
+    end
+    return best_p
+end
+
 function angular_difference_deg(angle_deg::Real, target_deg::Real)
     diff = abs(mod(angle_deg - target_deg + 180.0, 360.0) - 180.0)
     return min(diff, 180.0 - diff)
@@ -129,8 +162,7 @@ function fit_variogram_model(model_name, bins, experimental, value_variance;
     fit_bins = length(bins) > 4 ? bins[2:end] : bins
     fit_exp = length(experimental) > 4 ? experimental[2:end] : experimental
     model = model_name == "exponential" ? exponential_model : spherical_model
-    fit = curve_fit(model, fit_bins, fit_exp, p0; lower = lower, upper = upper)
-    params = Float64.(fit.param)
+    params = fit_bounded(model, fit_bins, fit_exp, p0; lower = lower, upper = upper)
     rmse = sqrt(mean(abs2.(model(bins, params) .- experimental)))
     return params, rmse
 end
@@ -249,8 +281,7 @@ end
 println(repeat("=", 72))
 println("  CLONCURRY — GeoStats ordinary kriging (density, susceptibility)")
 println(repeat("=", 72))
-@printf("  GeoStats env  %s\n", KRIG_ENV)
-isdir(KRIG_ENV) || error("missing $KRIG_ENV — install GeoStats there first")
+@printf("  GeoStats runner  %s\n", KRIG_RUNNER)
 isfile(KRIG_RUNNER) || error("missing $KRIG_RUNNER")
 
 DATASET = default_cloncurry_root()
@@ -333,7 +364,7 @@ println("  params → ", params_path)
 
 println()
 println("  launching GeoStats OrdinaryKriging …")
-cmd = `$(Base.julia_cmd()) --project=$(KRIG_ENV) $(KRIG_RUNNER) $(params_path) $(WORK)`
+cmd = `$(Base.julia_cmd()) --project=$(ROOT) $(KRIG_RUNNER) $(params_path) $(WORK)`
 println("  ", cmd)
 run(cmd)
 

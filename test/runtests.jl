@@ -1,19 +1,12 @@
 using Test
-using SmartPriorMT
+using SmartPrior
 
-@testset "SmartPriorMT" begin
+@testset "SmartPrior" begin
     include("TestGrid.jl")
-    include("TestGravity.jl")
-    include("TestMT1D.jl")
     include("TestFeatures.jl")
     include("TestPriorNet.jl")
     include("TestLosses.jl")
     include("TestTrain.jl")
-    include("TestExport.jl")
-    include("TestSynthetic.jl")
     include("TestMetrics.jl")
-    include("TestProfile2D.jl")
-    include("TestRealDataIO.jl")
-    include("TestKeivitsaIO.jl")
     include("TestCloncurryIO.jl")
 end

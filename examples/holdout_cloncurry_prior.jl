@@ -15,7 +15,7 @@
 #       SMARTPRIOR_WIDTHS (comma-separated, default 256,64), SMARTPRIOR_DEPTH,
 #       SMARTPRIOR_HOLDOUT_FRAC, SMARTPRIOR_BUFFER_M, SMARTPRIOR_SPLIT_SEED
 
-using SmartPriorMT
+using SmartPrior
 using Printf
 using Random
 using Statistics

@@ -1,24 +1,9 @@
-# Scoring a prior against a known truth.
+# Scoring a predicted field against held-out or known values.
 #
-# Two numbers decide whether a smart prior is worth using, and they pull against
-# each other:
-#
-#   coverage  -- does the search interval actually contain the truth
-#   volume    -- how much smaller is that interval than the scalar one
-#
-# Either alone is trivial to win. A prior with bounds spanning the full physical
-# range has perfect coverage and buys nothing; a prior with bounds a hundredth of
-# a decade wide reduces the volume enormously and excludes the answer, which is
-# worse than the half-space it replaced because the inversion can no longer
-# recover from it. Any claim about a prior has to report both.
-#
-# Calibration is the diagnostic that explains a bad pair. It asks whether sigma
-# means what it says, by looking at the standardised residual z = (truth - mu)/
-# sigma. A well-calibrated prior has |z| below 1 in about 68 per cent of cells and
-# an rms z near 1. An rms z above 1 is overconfidence and shows up as lost
-# coverage; below 1 is timidity and shows up as an unreduced volume. Which of the
-# two is happening tells you whether to reweight the sigma penalty or add
-# constraints, so it is worth computing before touching either.
+# Coverage and volume_reduction describe a search interval (μ ± kσ).
+# RMSE / MAE / anomaly_correlation score the mean. Calibration asks whether
+# σ means what it says: z = (truth - μ) / σ should have |z| < 1 in about
+# 68 % of cells and rms z near 1.
 
 # only cells where every quantity is defined; air is NaN throughout the pipeline
 function _live_mask(arrays...)
@@ -91,7 +76,7 @@ end
 
 Root-mean-square difference over cells where both are finite.
 
-In log10 resistivity, so 0.3 is roughly a factor of two.
+On a log10 property, 0.3 is roughly a factor of two.
 """
 function rmse(a::AbstractArray{<:Real}, b::AbstractArray{<:Real})
     mask = _live_mask(a, b)
@@ -181,81 +166,4 @@ function calibration(truth::AbstractArray{<:Real},
             within2 = count(<=(2.0), abs.(z)) / n,
             zrms = sqrt(mean(abs2, z)),
             bias = mean(resid))
-end
-
-"""
-    prior_report(truth, b::PriorBundle; reference=nothing) -> NamedTuple
-
-Every metric for one prior against one truth.
-
-`truth` is a log10 resistivity array or a [`SyntheticModel`](@ref). `reference`
-is the scalar interval to compare the volume against, defaulting to the bundle's
-own `log_rho_bounds`, which is what a run without a smart prior would have used.
-
-Report `coverage` and `volume_ratio` together; see [`print_report`](@ref).
-"""
-function prior_report(truth::AbstractArray{<:Real}, b::PriorBundle;
-                      reference::Union{Nothing,Tuple{Real,Real}} = nothing)
-    size(truth) == size(b) || throw(DimensionMismatch(
-        "prior_report: truth is $(size(truth)) but the bundle is $(size(b))"))
-
-    lo, hi = prior_bounds(b)
-    ref = reference === nothing ? b.log_rho_bounds : reference
-    cal = calibration(truth, b.mu, b.sigma)
-
-    return (rmse = rmse(truth, b.mu),
-            mae = mae(truth, b.mu),
-            correlation = anomaly_correlation(truth, b.mu),
-            coverage = coverage(truth, lo, hi),
-            volume_ratio = volume_reduction(lo, hi, ref),
-            k = b.k,
-            reference = (Float64(ref[1]), Float64(ref[2])),
-            calibration = cal)
-end
-
-prior_report(truth::SyntheticModel, b::PriorBundle; kwargs...) =
-    prior_report(truth.log_rho, b; kwargs...)
-
-"""
-    print_report(io=stdout, r; label="prior")
-
-Print a [`prior_report`](@ref) as a short block.
-"""
-function print_report(io::IO, r; label::AbstractString = "prior")
-    println(io, "--- ", label, " ---")
-    @printf(io, "  rmse            %.3f decades\n", r.rmse)
-    @printf(io, "  mae             %.3f decades\n", r.mae)
-    @printf(io, "  correlation     %.3f\n", r.correlation)
-    @printf(io, "  coverage        %.3f  (truth inside +-%.1f sigma)\n", r.coverage, r.k)
-    @printf(io, "  volume ratio    %.3f  (vs %.1f-%.1f log10 ohm-m)\n",
-            r.volume_ratio, r.reference[1], r.reference[2])
-    c = r.calibration
-    @printf(io, "  calibration     zrms %.2f, within1 %.2f, within2 %.2f, bias %+.3f\n",
-            c.zrms, c.within1, c.within2, c.bias)
-    return nothing
-end
-
-print_report(r; kwargs...) = print_report(stdout, r; kwargs...)
-
-"""
-    compare_starts(truth, baseline, result) -> NamedTuple
-
-Score an inversion result against the truth and against where it started.
-
-`baseline` is the starting model, `result` what the inversion returned. Reports
-both rmse values and `improvement`, the fractional reduction: 0.3 means the
-inversion closed 30 per cent of the gap it began with. Negative means it moved
-away from the truth, which a poor starting model can cause and is exactly the
-failure a smart prior is meant to prevent.
-"""
-function compare_starts(truth::AbstractArray{<:Real},
-                        baseline::AbstractArray{<:Real},
-                        result::AbstractArray{<:Real})
-    r0 = rmse(truth, baseline)
-    r1 = rmse(truth, result)
-    return (rmse_start = r0,
-            rmse_final = r1,
-            improvement = r0 > 0 ? (r0 - r1) / r0 : NaN,
-            correlation_start = anomaly_correlation(truth, baseline),
-            correlation_final = anomaly_correlation(truth, result))
 end

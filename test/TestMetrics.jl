@@ -1,5 +1,5 @@
 using Test
-using SmartPriorMT
+using SmartPrior
 using Random
 using Statistics
 
@@ -133,102 +133,12 @@ end
 end
 
 @testset "coverage agrees with calibration at the same k" begin
-    # the two are the same measurement seen from different sides, so a bundle
-    # built at k = 1 must have coverage equal to within1
     g = PriorGrid(fill(500.0, 10), fill(500.0, 10), fill(200.0, 2))
     rng = Xoshiro(7)
     mu = fill(2.0, size(g))
     sigma = fill(0.4, size(g))
     truth = mu .+ 0.4 .* randn(rng, size(g))
-
-    b1 = PriorBundle(g, mu, sigma; k = 1.0, min_width = 1e-9)
-    lo1, hi1 = prior_bounds(b1)
     c = calibration(truth, mu, sigma)
-    @test coverage(truth, lo1, hi1) ≈ c.within1
-
-    b2 = PriorBundle(g, mu, sigma; k = 2.0, min_width = 1e-9)
-    lo2, hi2 = prior_bounds(b2)
-    @test coverage(truth, lo2, hi2) ≈ c.within2
-end
-
-@testset "prior_report" begin
-    g = _metrics_grid()
-    truth = fill(2.4, size(g))
-    b = PriorBundle(g, fill(2.0, size(g)), fill(0.4, size(g));
-                    k = 2.0, log_rho_bounds = (0.0, 5.0))
-
-    r = prior_report(truth, b)
-    @test r.rmse ≈ 0.4
-    @test r.mae ≈ 0.4
-    @test isnan(r.correlation)          # both fields constant
-    @test r.coverage == 1.0
-    @test r.volume_ratio ≈ 1.6 / 5.0
-    @test r.k == 2.0
-    @test r.reference == (0.0, 5.0)
-    @test r.calibration.zrms ≈ 1.0
-
-    # an explicit reference overrides the bundle's own range
-    @test prior_report(truth, b; reference = (1.0, 3.0)).volume_ratio ≈ 1.6 / 2.0
-
-    # and a SyntheticModel works directly
-    m = truth_halfspace(g; log_rho = 2.4)
-    @test prior_report(m, b).rmse ≈ r.rmse
-
-    @test_throws DimensionMismatch prior_report(zeros(2, 2, 2), b)
-end
-
-@testset "prior_report shows the coverage-volume trade-off" begin
-    # neither number alone means anything: a wide prior wins coverage and buys
-    # nothing, a narrow one wins volume and loses the answer
-    g = PriorGrid(fill(500.0, 6), fill(500.0, 6), fill(200.0, 3))
-    rng = Xoshiro(12)
-    truth = fill(2.0, size(g)) .+ 0.5 .* randn(rng, size(g))
-    mu = fill(2.0, size(g))
-
-    wide = prior_report(truth, PriorBundle(g, mu, fill(2.0, size(g));
-                                          log_rho_bounds = (0.0, 5.0)))
-    narrow = prior_report(truth, PriorBundle(g, mu, fill(0.02, size(g));
-                                             log_rho_bounds = (0.0, 5.0)))
-
-    @test wide.coverage > narrow.coverage
-    @test wide.volume_ratio > narrow.volume_ratio
-    @test wide.calibration.zrms < 1 < narrow.calibration.zrms
-end
-
-@testset "print_report" begin
-    g = _metrics_grid()
-    r = prior_report(fill(2.4, size(g)),
-                     PriorBundle(g, fill(2.0, size(g)), fill(0.4, size(g))))
-    io = IOBuffer()
-    print_report(io, r; label = "test prior")
-    s = String(take!(io))
-    @test occursin("test prior", s)
-    @test occursin("coverage", s)
-    @test occursin("volume ratio", s)
-    @test occursin("calibration", s)
-end
-
-@testset "compare_starts" begin
-    truth = fill(2.0, 4, 4, 2)
-    truth[1, 1, 1] = 1.0
-
-    # a half-space baseline is constant, so its correlation with the truth is
-    # undefined -- which is itself the point: it carries no structure at all
-    baseline = fill(2.5, 4, 4, 2)
-    better = fill(2.1, 4, 4, 2); better[1, 1, 1] = 1.4
-    worse = fill(4.0, 4, 4, 2)
-
-    r = compare_starts(truth, baseline, better)
-    @test r.rmse_final < r.rmse_start
-    @test 0 < r.improvement < 1
-    @test isnan(r.correlation_start)
-    # the result found the anomaly, so its correlation is defined and positive
-    @test r.correlation_final > 0.9
-
-    # moving away from the truth must read as negative, which is the failure a
-    # smart prior is meant to prevent
-    @test compare_starts(truth, baseline, worse).improvement < 0
-
-    # a perfect result closes the whole gap
-    @test compare_starts(truth, baseline, truth).improvement ≈ 1.0
+    @test coverage(truth, mu .- sigma, mu .+ sigma) ≈ c.within1
+    @test coverage(truth, mu .- 2 .* sigma, mu .+ 2 .* sigma) ≈ c.within2
 end

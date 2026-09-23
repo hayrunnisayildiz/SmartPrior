@@ -1,5 +1,4 @@
-# Manifest.toml is tracked (not ignored). MTGeophysics is pinned to the
-# combination this package was tested against; see README Installation.
+# Manifest.toml is tracked (not ignored).
 
 # training checkpoints and run outputs
 *.jld2

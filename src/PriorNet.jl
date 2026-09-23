@@ -1,8 +1,8 @@
 # Lux neural field mapping features to a per-cell prior.
 #
-# The network outputs two numbers per cell: a nominal log10 resistivity `mu` and
-# a confidence `sigma`. Together they are the prior: `mu` is the starting model
-# and `mu +- k*sigma` the per-cell search interval.
+# The network outputs two numbers per property per cell: a nominal value `mu`
+# and a confidence `sigma`. Together they are the prior: `mu` is the predicted
+# field and `mu ± k*sigma` the per-cell interval.
 #
 # Both outputs are hard-bounded by construction rather than by penalty terms.
 # That is the important design choice here. An unbounded heteroscedastic sigma
@@ -88,13 +88,14 @@ end
 
 Neural field mapping `nin` features per cell to `(mu, sigma)` per property.
 
-`nproperties = 1` is the original resistivity prior: the last layer is
+`nproperties = 1` is a single-property field: the last layer is
 `Dense(width => 2)` and [`predict`](@ref) returns two length-`ncell` vectors.
-`nproperties = 4` is the Keivitsa layout — grade, density, susceptibility,
-resistivity — with `Dense(width => 8)` and a `(4, ncell)` pair of matrices.
+`nproperties = 4` is the Cloncurry layout — grade, density, susceptibility,
+conductivity_100kHz — with `Dense(width => 8)` and a `(4, ncell)` pair of
+matrices.
 
-- `log_rho_bounds`: physical limits on the first property (log10 resistivity in
-  the single-property case), kept so export and VFSA code keep working.
+- `log_rho_bounds`: physical limits on the first property when `mu_bounds` is
+  omitted. The name is historical; it is just the default squash interval.
 - `mu_bounds`: optional length-`nproperties` vector of `(lo, hi)` squash limits.
   Defaults to `log_rho_bounds` repeated.
 - `residual_span`: in residual mode, the largest deviation the network may add
@@ -122,7 +123,8 @@ struct PriorNet{M} <: Lux.AbstractLuxWrapperLayer{:model}
     property_names::Vector{String}
 end
 
-const DEFAULT_MULTI_PROPERTIES = ["grade", "density", "susceptibility", "resistivity"]
+const DEFAULT_MULTI_PROPERTIES = ["grade", "density", "susceptibility",
+                                  "conductivity_100kHz"]
 
 function _fill_bounds(value::Tuple{Float64,Float64}, n::Int)
     return fill(value, n)
@@ -181,7 +183,7 @@ function PriorNet(nin::Integer;
             "PriorNet: property_names has $(length(nms)) entries, nproperties=$P"))
         nms
     elseif P == 1
-        ["resistivity"]
+        ["property"]
     elseif P == 4
         copy(DEFAULT_MULTI_PROPERTIES)
     else
@@ -210,9 +212,8 @@ end
 
 Initialise parameters and state.
 
-Defaults to `Float64` rather than Lux's `Float32`, because the physics terms in
-the loss run in double precision and a mixed-precision graph would promote on
-every step anyway. Prior grids are small enough that the cost is irrelevant.
+Defaults to `Float64` rather than Lux's `Float32`. Prior grids are small
+enough that the cost is irrelevant.
 """
 function setup_prior(rng::AbstractRNG, net::PriorNet;
                      precision::Type{<:AbstractFloat} = Float64)
@@ -237,26 +238,15 @@ end
 
 Evaluate the field on a `[nfeature, ncell]` input.
 
-For `nproperties = 1` this is the original contract: `mu` in log10 ohm-metres
-and `sigma` in decades, both length `ncell`. For `nproperties > 1` both outputs
-are `[nproperties, ncell]` matrices, one row per property in
-`net.property_names` order, each squashed into that property's `mu_bounds` /
-`sigma_bounds_per`.
+For `nproperties = 1` `mu` and `sigma` are length-`ncell` vectors. For
+`nproperties > 1` both outputs are `[nproperties, ncell]` matrices, one row
+per property in `net.property_names` order, each squashed into that
+property's `mu_bounds` / `sigma_bounds_per`.
 
 With `offset === nothing` the network works in absolute mode. Passing `offset`
-(normally a Niblett-Bostick baseline from [`nb_baseline`](@ref)) switches to
-residual mode, where `mu` is squashed into the band `offset ± residual_span`
-*intersected with* `log_rho_bounds`. Residual mode is only defined for a
-single-property net: a four-property field has no shared baseline to residual
-against.
-
-The intersection matters. Without it a wide residual span lets `mu` leave the
-physical range entirely, and since `mu` is written out as the inversion's starting
-model, that is not something the export step can repair after the fact. The cost
-is that the reachable band becomes asymmetric about the offset wherever the
-offset sits within `residual_span` of a physical bound, which is the correct
-behaviour: the field should not be able to propose resistivity it has been told
-is impossible.
+switches to residual mode, where `mu` is squashed into the band
+`offset ± residual_span` intersected with the property bounds. Residual mode
+is only defined for a single-property net.
 """
 function predict(net::PriorNet, X::AbstractMatrix, ps, st;
                  offset::Union{Nothing,AbstractVector} = nothing)

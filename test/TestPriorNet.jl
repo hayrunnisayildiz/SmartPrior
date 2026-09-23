@@ -1,5 +1,5 @@
 using Test
-using SmartPriorMT
+using SmartPrior
 using Lux
 using Random
 using Statistics
@@ -72,7 +72,8 @@ end
                    mu_bounds = [(0.0, 5.0), (2.0, 4.0), (-1.0, 6.0), (-1.0, 7.0)],
                    sigma_bounds = (0.05, 1.2))
     @test net.nproperties == 4
-    @test net.property_names == ["grade", "density", "susceptibility", "resistivity"]
+    @test net.property_names == ["grade", "density", "susceptibility",
+                                "conductivity_100kHz"]
     ps, st = setup_prior(Xoshiro(2), net)
     X = randn(Xoshiro(3), 6, 40)
     (mus, sigmas), _ = predict(net, X, ps, st)

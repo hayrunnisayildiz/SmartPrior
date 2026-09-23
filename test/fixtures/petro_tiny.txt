@@ -1,7 +1,0 @@
-Numero ^ Nayte.id ^ Tunnus ^ Syvyys ^ Osasto ^ Vuosi ^ Reikanro ^ Kl100 ^ ReiYht_X ^ ReiYht_Y ^ ReiKkj_X ^ ReiKkj_y ^ Rei_Z ^ PTR_D ^ PTR_J ^ PTR_K ^ LUO_R ^ DSR_D ^ DSR_J ^ DSR_K
-int ^ int ^ char ^ real ^ char ^ int ^ char ^ char ^ int ^ int ^ int ^ int ^ real ^ real ^ real ^ real ^ real ^ real ^ real ^ real
-8 ^ 10 ^ 14 ^ 7 ^ 1 ^ 4 ^ 6 ^ 4 ^ 7 ^ 7 ^ 7 ^ 7 ^ 7 ^ 13 ^ 13 ^ 13 ^ 13 ^ 13 ^ 13 ^ 13
-0 ^ 0 ^ 0 ^ 2 ^ 0 ^ 0 ^ 0 ^ 0 ^ 0 ^ 0 ^ 0 ^ 0 ^ 2 ^ 2 ^ 2 ^ 2 ^ 2 ^ 2 ^ 2 ^ 2
-1 ^ 1 ^ HOLE1 ^ 10.00 ^ M ^ 87 ^ 1 ^ 3714 ^ 7512000 ^ 3498500 ^ 7512000 ^ 3498500 ^ 200.00 ^ 3000.00 ^ 100.00 ^ 999.00 ^ 50.00 ^ 3100.00 ^ 80.00 ^ 888.00
-2 ^ 2 ^ HOLE1 ^ 20.00 ^ M ^ 87 ^ 1 ^ 3714 ^ 7512000 ^ 3498500 ^ 7512000 ^ 3498500 ^ 200.00 ^  ^  ^  ^ 100.00 ^ 2800.00 ^ 40.00 ^ 
-3 ^ 3 ^ HOLE1 ^ 30.00 ^ M ^ 87 ^ 1 ^ 3714 ^ 7512000 ^ 3498500 ^ 7512000 ^ 3498500 ^ 200.00 ^ 3200.00 ^ 200.00 ^ 111.00 ^  ^  ^  ^ 

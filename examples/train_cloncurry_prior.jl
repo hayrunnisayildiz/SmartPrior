@@ -1,7 +1,6 @@
 # Train a four-property prior on Cloncurry–Ernest Henry (METAL).
 #
-# Separate from examples/compare_prior_2d.jl and from the Keivitsa scripts:
-# no gravity, no magnetics, no MT, no VFSA. Features are pXRF geochemistry
+# No gravity, no magnetics, no MT. Features are pXRF geochemistry
 # (Cu held out), lithology_code, structural geology (fault/line distance +
 # surface-map dom_rock / rock_type one-hots), and sample coverage. Anchors are
 # Cu_Concentration plus density / susceptibility / conductivity_100kHz
@@ -22,7 +21,7 @@
 # generalization. District default is ~70/15/15 of named collars. The older
 # 191/45/19 draft was Cu sample counts on Ernest Henry only.
 
-using SmartPriorMT
+using SmartPrior
 using Printf
 using Random
 using Statistics
@@ -161,7 +160,7 @@ if district_box
                    1:length(samples))
     @printf("  sample AABB covers %d finite-xyz rows; work box covers %d\n",
             n_xyz, n_work)
-    @printf("  spacing vs target   %.0f m × %.0f m  → ~%d cells (target %d; Keivitsa ~23800)\n",
+    @printf("  spacing vs target   %.0f m × %.0f m  → ~%d cells (target %d)\n",
             spacing.cell, spacing.cell_z, spacing.ncells, TARGET_CELLS)
 end
 

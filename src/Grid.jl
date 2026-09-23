@@ -1,18 +1,15 @@
-# Tensor-product grid shared by the prior model and the MT inversion mesh.
-# Conventions follow the WS3D model format used by MTGeophysics.jl: arrays are
-# indexed [i, j, k] with x north, y east, z down, all lengths in metres, and the
-# origin placed at the (x, y, z) corner of the first cell.
+# Tensor-product 3-D grid for the neural-field block model.
+# Arrays are indexed [i, j, k]. Axis meaning is the caller's: Cloncurry uses
+# x = easting, y = northing, z = elevation (positive up), metres. The origin
+# is the (x, y, z) corner of the first cell.
 
 """
     PriorGrid(dx, dy, dz; origin=[0.0, 0.0, 0.0])
-    PriorGrid(m::WS3DModel)
 
 Tensor-product 3-D grid on which a prior model lives.
 
-`dx`, `dy`, `dz` are cell widths in metres along north, east and down. Cell edges
-and centres are derived once at construction. Building from a [`WS3DModel`](@ref)
-guarantees the prior lands on exactly the mesh the inversion will use, which is
-the whole point of the type: a prior on a different mesh is unusable.
+`dx`, `dy`, `dz` are cell widths in metres. Cell edges and centres are derived
+once at construction.
 """
 struct PriorGrid
     dx::Vector{Float64}
@@ -60,8 +57,6 @@ function PriorGrid(dx::AbstractVector{<:Real},
 
     return PriorGrid(dxv, dyv, dzv, o, x, y, z, cx, cy, cz, h_median)
 end
-
-PriorGrid(m::WS3DModel) = PriorGrid(m.dx, m.dy, m.dz; origin = m.origin)
 
 Base.size(g::PriorGrid) = (length(g.dx), length(g.dy), length(g.dz))
 Base.size(g::PriorGrid, d::Integer) = size(g)[d]
@@ -194,4 +189,64 @@ function Base.show(io::IO, g::PriorGrid)
             (g.x[end] - g.x[1]) / 1000,
             (g.y[end] - g.y[1]) / 1000,
             (g.z[end] - g.z[1]) / 1000)
+end
+
+"""
+    cu_log10(cu_ppm; detection_limit=1.0) -> Float64
+
+`log10` copper, with negatives and values below the detection limit lifted to
+`detection_limit`.
+"""
+function cu_log10(cu_ppm::Real; detection_limit::Real = 1.0)
+    isfinite(cu_ppm) || return NaN
+    v = cu_ppm < 0 ? detection_limit : Float64(cu_ppm)
+    return log10(max(v, detection_limit))
+end
+
+"""
+    aggregate_to_cells(cells, values, weights) -> (cells, values, weights)
+
+Weighted mean of `values` per unique cell index. Index `0` (outside the grid)
+is dropped.
+"""
+function aggregate_to_cells(cells::Vector{Int}, values::Vector{Float64},
+                            weights::Vector{Float64})
+    acc_v = Dict{Int,Float64}()
+    acc_w = Dict{Int,Float64}()
+    @inbounds for i in eachindex(cells)
+        c = cells[i]
+        c == 0 && continue
+        v = values[i]
+        w = weights[i]
+        (isfinite(v) && isfinite(w) && w > 0) || continue
+        acc_v[c] = get(acc_v, c, 0.0) + w * v
+        acc_w[c] = get(acc_w, c, 0.0) + w
+    end
+    ks = sort!(collect(keys(acc_w)))
+    out_c = Vector{Int}(undef, length(ks))
+    out_v = Vector{Float64}(undef, length(ks))
+    out_w = Vector{Float64}(undef, length(ks))
+    for (i, c) in enumerate(ks)
+        out_c[i] = c
+        out_w[i] = acc_w[c]
+        out_v[i] = acc_v[c] / acc_w[c]
+    end
+    return out_c, out_v, out_w
+end
+
+"""
+    map_points_to_cells(g, x, y, z, values; weights=nothing)
+        -> (cells, values, weights)
+
+Map scattered samples onto the grid and return the weighted mean per cell.
+"""
+function map_points_to_cells(g::PriorGrid, x, y, z, values;
+                             weights = nothing)
+    n = length(x)
+    w = weights === nothing ? ones(n) : collect(Float64, weights)
+    cells = Vector{Int}(undef, n)
+    @inbounds for i in 1:n
+        cells[i] = containing_cell(g, x[i], y[i], z[i])
+    end
+    return aggregate_to_cells(cells, collect(Float64, values), w)
 end

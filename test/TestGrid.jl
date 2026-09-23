@@ -1,6 +1,5 @@
 using Test
-using SmartPriorMT
-using MTGeophysics: write_ws3d_model, load_ws3d_model
+using SmartPrior
 
 @testset "PriorGrid" begin
     dx = [100.0, 200.0, 400.0]
@@ -39,14 +38,10 @@ using MTGeophysics: write_ws3d_model, load_ws3d_model
     @test all(-1 .<= Zn .<= 1)
     @test Xn[1, 1, 1] < Xn[3, 1, 1]
 
-    # cached because `median` sorts in place, which Zygote rejects inside a
-    # differentiated function
-    @test g.h_median == 100.0     # median of [100, 200, 400, 50, 50]
+    @test g.h_median == 100.0
 end
 
 @testset "PriorGrid: origin offset does not leak into depth" begin
-    # a grid whose datum sits 500 m above the ground surface, as on topography
-    # models where the top layers are air
     g = PriorGrid([100.0], [100.0], [250.0, 250.0]; origin = [0.0, 0.0, -500.0])
     @test g.cz ≈ [-375.0, -125.0]
     @test depth_below_top(g)[1, 1, :] ≈ [125.0, 375.0]
@@ -59,24 +54,18 @@ end
     @test_throws ArgumentError PriorGrid([1.0], [1.0], [1.0]; origin = [0.0, 0.0])
 end
 
-@testset "PriorGrid: round trip through a WS3D model" begin
-    dx = [500.0, 500.0, 500.0]
-    dy = [400.0, 400.0]
-    dz = [100.0, 200.0]
-    origin = [-750.0, -400.0, 0.0]
-    A = fill(2.0, 3, 2, 2)
+@testset "cu_log10 and map_points_to_cells" begin
+    @test cu_log10(100.0) ≈ 2.0
+    @test cu_log10(0.1; detection_limit = 1.0) ≈ 0.0
+    @test cu_log10(-3.0; detection_limit = 1.0) ≈ 0.0
+    @test isnan(cu_log10(NaN))
 
-    path = joinpath(mktempdir(), "grid_roundtrip.rho")
-    write_ws3d_model(path, dx, dy, dz, A, origin)
-    m = load_ws3d_model(path)
-    g = PriorGrid(m)
-
-    @test size(g) == (3, 2, 2)
-    @test g.dx ≈ dx
-    @test g.dy ≈ dy
-    @test g.dz ≈ dz
-    @test g.origin ≈ origin
-    @test g.cx ≈ m.cx
-    @test g.cy ≈ m.cy
-    @test g.cz ≈ m.cz
+    g = PriorGrid(fill(100.0, 2), fill(100.0, 2), [50.0]; origin = [0.0, 0.0, 0.0])
+    cells, vals, wts = map_points_to_cells(g,
+        [50.0, 50.0, 150.0], [50.0, 50.0, 50.0], [25.0, 25.0, 25.0],
+        [1.0, 3.0, 10.0]; weights = [1.0, 1.0, 1.0])
+    @test length(cells) == 2
+    @test vals[1] ≈ 2.0
+    @test vals[2] ≈ 10.0
+    @test Set(wts) == Set([2.0, 1.0])
 end

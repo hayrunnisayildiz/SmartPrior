@@ -13,14 +13,11 @@
 #      SMARTPRIOR_SPLIT_SEED, SMARTPRIOR_TRAIN_SEED, SMARTPRIOR_TARGET_CELLS,
 #      SMARTPRIOR_CELL_M, SMARTPRIOR_CELL_Z, SMARTPRIOR_CHECKPOINT
 
-using SmartPriorMT
+using SmartPrior
+using GLMakie
 using Printf
 using Random
 using Statistics
-using Plots
-
-get!(ENV, "GKSwstype", "100")
-gr()
 
 const ROOT = dirname(@__DIR__)
 const WIDTH = parse(Int, get(ENV, "SMARTPRIOR_WIDTH", "256"))
@@ -208,7 +205,12 @@ size(mus) == (4, n_grid) || throw(DimensionMismatch("predict returned $(size(mus
 @printf("  test holes / samples        %d / %d\n",
         split.n_test_groups, length(test_idx))
 
-function calibration_panel(p)
+GLMakie.activate!(; visible = false)
+fig = Figure(size = (1600, 1200), backgroundcolor = :white)
+fig[0, 1:4] = Label(fig,
+    "Cloncurry district hold-out — test holes only (Z=$(round(Int, CELL_Z)) m)";
+    fontsize = 18)
+for p in 1:4
     meta = PANEL_META[p]
     obs, pred, sig = collect_test_pairs(mus, sigmas, grid, samples, test_idx, p)
     n = length(obs)
@@ -217,58 +219,29 @@ function calibration_panel(p)
     rmse = n == 0 ? NaN : sqrt(mean(abs2, pred .- obs))
     @printf("  %-22s n=%d  r=%.3f  R²=%.3f  RMSE=%.4f  mean(σ)=%.3f\n",
             meta.name, n, r, r2, rmse, n == 0 ? NaN : mean(sig))
-
-    if n == 0
-        return plot(title = "$(meta.name)  (n=0)"; legend = false, framestyle = :box)
-    end
-
+    row = (p - 1) ÷ 2 + 1
+    col0 = 2 * ((p - 1) % 2)
+    ax = Axis(fig[row, col0 + 1];
+              xlabel = meta.xlabel, ylabel = meta.ylabel, aspect = DataAspect(),
+              title = @sprintf("%s  n=%d  r=%.3f  R²=%.3f", meta.name, n, r, r2))
+    n == 0 && continue
     lo = min(minimum(obs), minimum(pred))
     hi = max(maximum(obs), maximum(pred))
     pad = 0.05 * (hi - lo + eps())
     lims = (lo - pad, hi + pad)
-    # Per-panel σ scale: density ~0.25 vs susceptibility ~1.0 are not comparable.
     σlo, σhi = extrema(sig)
     if σlo == σhi
         σlo -= 0.05
         σhi += 0.05
     end
-
-    plt = scatter(obs, pred;
-                  zcolor = sig,
-                  c = :viridis,
-                  clims = (σlo, σhi),
-                  colorbar = true,
-                  colorbar_title = "σ",
-                  markersize = 4,
-                  markerstrokewidth = 0,
-                  alpha = 0.85,
-                  xlims = lims, ylims = lims,
-                  aspect_ratio = :equal,
-                  xlabel = meta.xlabel,
-                  ylabel = meta.ylabel,
-                  title = @sprintf("%s  n=%d  r=%.3f  R²=%.3f", meta.name, n, r, r2),
-                  titlefontsize = 11,
-                  guidefontsize = 9,
-                  tickfontsize = 8,
-                  legend = false,
-                  framestyle = :box)
-    plot!(plt, [lims[1], lims[2]], [lims[1], lims[2]];
-          color = :black, linestyle = :dash, linewidth = 1.5, label = "")
-    return plt
+    sc = scatter!(ax, obs, pred; color = sig, colormap = :viridis,
+                  colorrange = (σlo, σhi), markersize = 8)
+    lines!(ax, [lims[1], lims[2]], [lims[1], lims[2]];
+           color = :black, linestyle = :dash, linewidth = 1.5)
+    xlims!(ax, lims); ylims!(ax, lims)
+    Colorbar(fig[row, col0 + 2], sc; label = "σ")
 end
 
-panels = [calibration_panel(p) for p in 1:4]
-plt = plot(panels...;
-           layout = (2, 2),
-           size = (1600, 1200),
-           left_margin = 8Plots.mm,
-           right_margin = 10Plots.mm,
-           top_margin = 6Plots.mm,
-           bottom_margin = 8Plots.mm,
-           plot_title = "Cloncurry district hold-out — test holes only (Z=$(round(Int, CELL_Z)) m)",
-           plot_titlefontsize = 13,
-           plot_titlegap = 8)
-
 mkpath(dirname(OUT_PNG))
-savefig(plt, OUT_PNG)
+save(OUT_PNG, fig)
 @info "wrote" OUT_PNG bytes = filesize(OUT_PNG)

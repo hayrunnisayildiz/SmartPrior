@@ -1,5 +1,5 @@
 using Test
-using SmartPriorMT
+using SmartPrior
 using CodecZlib
 using Random
 

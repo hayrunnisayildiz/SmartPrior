@@ -2,7 +2,8 @@
 #
 # Ports the *method* of NISAI `variogram_analysis.py` (azimuth scan, directional
 # pair filter, Spherical/Exponential fit, degenerate-range fallback) — not a
-# line-by-line copy. No scikit-gstat / geostats package; LsqFit.jl for curve_fit.
+# line-by-line copy. Bounded least-squares is local; GeoStats.jl is used by
+# the kriging example, not here.
 #
 # Composite support is not used: samples are point specimens. Minimum lag is the
 # median nearest-neighbour distance among finite-xyz points (~9.5 m).
@@ -17,9 +18,8 @@
 #       SMARTPRIOR_CELL_M, SMARTPRIOR_CELL_Z, SMARTPRIOR_TARGET_CELLS,
 #       SMARTPRIOR_MAXLAG_MULTS (comma list, default 1,2,3 for grade/cond)
 
-using SmartPriorMT
+using SmartPrior
 using LinearAlgebra
-using LsqFit
 using Printf
 using Random
 using Statistics
@@ -54,7 +54,7 @@ end
 
 #---------- models ----------
 
-# Dual-safe (LsqFit ForwardDiff); keep arithmetic generic in `a,sill,nugget`.
+# Keep arithmetic generic in `a,sill,nugget`.
 function spherical_gamma(h, a, sill, nugget)
     a_safe = max(a, oftype(a, 1e-6))
     if h <= a
@@ -82,6 +82,44 @@ end
 function exponential_model(h, p)
     a, sill, nugget = p[1], p[2], p[3]
     return exponential_gamma.(h, a, sill, nugget)
+end
+
+function fit_bounded(model, x, y, p0; lower, upper, n_restarts = 8)
+    lo = collect(Float64, lower)
+    hi = collect(Float64, upper)
+    best_p = clamp.(collect(Float64, p0), lo, hi)
+    best_s = sum(abs2, model(x, best_p) .- y)
+    spans = hi .- lo
+    rng = Xoshiro(1)
+    for k in 0:n_restarts
+        p = k == 0 ? copy(best_p) : clamp.(lo .+ rand(rng, 3) .* spans, lo, hi)
+        step = 0.25
+        for _ in 1:80
+            improved = false
+            for j in 1:3
+                for s in (-step, step)
+                    cand = copy(p)
+                    cand[j] = j == 1 ?
+                        clamp(cand[j] * exp(s), lo[j], hi[j]) :
+                        clamp(cand[j] * (1 + s), lo[j], hi[j])
+                    ss = sum(abs2, model(x, cand) .- y)
+                    if ss + 1e-15 < best_s
+                        best_s = ss
+                        p = cand
+                        improved = true
+                    end
+                end
+            end
+            improved || (step *= 0.5)
+            step < 1e-4 && break
+        end
+        ss = sum(abs2, model(x, p) .- y)
+        if ss < best_s
+            best_s = ss
+            best_p = copy(p)
+        end
+    end
+    return best_p
 end
 
 #---------- geometry helpers ----------
@@ -300,8 +338,7 @@ function fit_variogram_model(model_name, bins, experimental, value_variance;
     fit_exp = length(experimental) > 4 ? experimental[2:end] : experimental
     model = model_name == "exponential" ? exponential_model : spherical_model
 
-    fit = curve_fit(model, fit_bins, fit_exp, p0; lower=lower, upper=upper)
-    params = Float64.(fit.param)
+    params = fit_bounded(model, fit_bins, fit_exp, p0; lower=lower, upper=upper)
     fitted = model(bins, params)
     rmse = sqrt(mean(abs2.(fitted .- experimental)))
     return params, rmse, range_upper
@@ -355,7 +392,7 @@ function find_best_model(coords, values; azimuth=0.0, tolerance=22.5, n_lags=20,
                                              binned.bins, binned.experimental)
             end
         catch
-            # LsqFit / bounds failure — try the other model
+            # bounds / fit failure — try the other model
         end
     end
 

@@ -1,105 +1,9 @@
-# Multi-physics data to feature tensor.
+# Scattered samples to a feature tensor.
 #
 # Every channel produced here is dimensionless and standardised within the
-# survey. That is a deliberate constraint rather than tidiness: a channel carrying
-# absolute mGal or absolute metres ties the trained network to one survey's units
-# and extent, which is exactly the coupling that stops a prior generator from
-# transferring between sites. Standardising in-survey also removes the regional
-# level of a Bouguer field, which no local inversion can constrain anyway.
-#
-# Feature tensors are [nx, ny, nz, nchannel] so that a channel is a contiguous
-# 3-D slice matching the model grid.
-
-"""
-    GravityObs(x, y, z, value, err)
-
-Scattered gravity observations in the grid's own frame.
-
-`x`, `y`, `z` are station coordinates in metres (`z` positive down, so stations
-above the grid top have negative `z`), `value` the anomaly in mGal and `err` its
-uncertainty in mGal.
-
-The anomaly is expected to be a *complete Bouguer* anomaly, i.e. with the
-topographic mass effect already removed, since the forward operator in
-[`gravity_matrix`](@ref) models density contrast in the model volume only.
-"""
-struct GravityObs
-    x::Vector{Float64}
-    y::Vector{Float64}
-    z::Vector{Float64}
-    value::Vector{Float64}
-    err::Vector{Float64}
-
-    function GravityObs(x::AbstractVector{<:Real}, y::AbstractVector{<:Real},
-                       z::AbstractVector{<:Real}, value::AbstractVector{<:Real},
-                       err::AbstractVector{<:Real})
-        n = length(x)
-        all(==(n), (length(y), length(z), length(value), length(err))) ||
-            throw(ArgumentError("GravityObs: all fields must have the same length"))
-        n > 0 || throw(ArgumentError("GravityObs: need at least one station"))
-        return new(collect(Float64, x), collect(Float64, y), collect(Float64, z),
-                   collect(Float64, value), collect(Float64, err))
-    end
-end
-
-Base.length(o::GravityObs) = length(o.x)
-
-"""
-    MTSites(x, y, periods, rho_a, phase; err_rho_a=nothing, err_phase=nothing)
-
-MT sounding curves at scattered sites, in the grid's own frame.
-
-`x`, `y` are site coordinates in metres. `rho_a` and `phase` are
-`[nperiod, nsite]` matrices of apparent resistivity (ohm-metres) and impedance
-phase (degrees); for tensor data pass a rotationally invariant average such as
-the Berdichevsky mean rather than a single off-diagonal component.
-
-`err_rho_a` and `err_phase` are optional keyword-only `[nperiod, nsite]`
-uncertainties in the same units as `rho_a` and `phase`. The five-argument
-positional constructor is unchanged: omit them and they stay `nothing`, which
-leaves [`mt_column_misfit`](@ref) scoring raw residuals rather than χ²/datum, so
-its weight is no longer comparable to the gravity term's.
-"""
-struct MTSites
-    x::Vector{Float64}
-    y::Vector{Float64}
-    periods::Vector{Float64}
-    rho_a::Matrix{Float64}
-    phase::Matrix{Float64}
-    err_rho_a::Union{Nothing,Matrix{Float64}}
-    err_phase::Union{Nothing,Matrix{Float64}}
-
-    function MTSites(x::AbstractVector{<:Real}, y::AbstractVector{<:Real},
-                     periods::AbstractVector{<:Real},
-                     rho_a::AbstractMatrix{<:Real}, phase::AbstractMatrix{<:Real};
-                     err_rho_a::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
-                     err_phase::Union{Nothing,AbstractMatrix{<:Real}} = nothing)
-        ns = length(x)
-        length(y) == ns || throw(ArgumentError("MTSites: x and y must have the same length"))
-        ns > 0 || throw(ArgumentError("MTSites: need at least one site"))
-        np = length(periods)
-        size(rho_a) == (np, ns) || throw(ArgumentError(
-            "MTSites: rho_a must be (nperiod, nsite) = ($np, $ns), got $(size(rho_a))"))
-        size(phase) == (np, ns) || throw(ArgumentError(
-            "MTSites: phase must be (nperiod, nsite) = ($np, $ns), got $(size(phase))"))
-        err_a = _mtsites_err("err_rho_a", err_rho_a, np, ns)
-        err_p = _mtsites_err("err_phase", err_phase, np, ns)
-        return new(collect(Float64, x), collect(Float64, y), collect(Float64, periods),
-                   Matrix{Float64}(rho_a), Matrix{Float64}(phase), err_a, err_p)
-    end
-end
-
-function _mtsites_err(::String, ::Nothing, ::Integer, ::Integer)
-    return nothing
-end
-
-function _mtsites_err(name::String, err::AbstractMatrix{<:Real}, np::Integer, ns::Integer)
-    size(err) == (np, ns) || throw(ArgumentError(
-        "MTSites: $name must be (nperiod, nsite) = ($np, $ns), got $(size(err))"))
-    return Matrix{Float64}(err)
-end
-
-nsites(s::MTSites) = length(s.x)
+# survey, except one-hot lithology (already on a fixed 0/1 scale). Feature
+# tensors are [nx, ny, nz, nchannel] so that a channel is a contiguous 3-D
+# slice matching the model grid.
 
 """
     PointSamples(x, y, values, names; z=nothing)
@@ -108,7 +12,7 @@ Scattered numeric samples for nearest-neighbour interpolation onto a prior grid.
 
 `values` is `[nsample, nchannel]` with one column per entry in `names`. `z` is
 optional: omit it (or pass `nothing`) for a plan-view interpolant that is then
-extruded through depth, the same pattern as [`gravity_channels`](@ref).
+extruded through depth.
 """
 struct PointSamples
     x::Vector{Float64}
@@ -178,63 +82,11 @@ end
 Base.length(s::LabelSamples) = length(s.x)
 
 """
-    mt_apparent_errors_from_impedance(rho_a, z, z_err, frequencies)
-        -> (err_rho_a, err_phase)
-
-Propagate absolute impedance uncertainties (the same σ on Re and Im) to linear
-apparent-resistivity and phase errors. Used when building [`MTSites`](@ref) from
-2D data files whose native errors live on `Z`.
-"""
-function mt_apparent_errors_from_impedance(rho_a::AbstractMatrix{<:Real},
-                                           z::AbstractMatrix{<:Complex},
-                                           z_err::AbstractMatrix{<:Real},
-                                           frequencies::AbstractVector{<:Real})
-    size(rho_a) == size(z) == size(z_err) ||
-        throw(DimensionMismatch("mt_apparent_errors_from_impedance: rho_a, z and z_err must match"))
-    length(frequencies) == size(rho_a, 1) ||
-        throw(DimensionMismatch("mt_apparent_errors_from_impedance: one frequency per period row"))
-
-    nf, ns = size(rho_a)
-    err_rho = Matrix{Float64}(undef, nf, ns)
-    err_phase = Matrix{Float64}(undef, nf, ns)
-    @inbounds for s in 1:ns, f in 1:nf
-        zf = z[f, s]
-        σ = z_err[f, s]
-        ω = 2π * frequencies[f]
-        if !isfinite(real(zf)) || !isfinite(imag(zf)) || !isfinite(σ) || σ <= 0 || ω <= 0
-            err_rho[f, s] = NaN
-            err_phase[f, s] = NaN
-            continue
-        end
-        re, im = real(zf), imag(zf)
-        inv_mu0w = 1 / (MU0 * ω)
-        err_rho[f, s] = sqrt((2re * inv_mu0w)^2 * σ^2 + (2im * inv_mu0w)^2 * σ^2)
-        mag2 = abs2(zf)
-        err_phase[f, s] = mag2 > 0 ?
-            rad2deg(sqrt(((-im / mag2) * σ)^2 + ((re / mag2) * σ)^2)) : NaN
-    end
-    return err_rho, err_phase
-end
-
-"""
-    mt_apparent_errors_from_relative_noise(rho_a, noise) -> (err_rho_a, err_phase)
-
-Uncertainties matching [`synth_mt_sites`](@ref)'s `noise` model: relative σ on
-`rho_a` and `(noise/2 * 180/π)` degrees on phase.
-"""
-function mt_apparent_errors_from_relative_noise(rho_a::AbstractMatrix{<:Real}, noise::Real)
-    noise >= 0 || throw(ArgumentError("mt_apparent_errors_from_relative_noise: noise must be non-negative"))
-    err_rho = Matrix{Float64}(noise .* rho_a)
-    err_phase = fill(noise / 2 * 180 / π, size(rho_a))
-    return err_rho, err_phase
-end
-
-"""
     FeatureStack(data, names)
 
 Feature tensor of size `[nx, ny, nz, nchannel]` with one name per channel.
 
-Index by channel name with `stack["gravity"]` to get the `[nx, ny, nz]` slice.
+Index by channel name with `stack["log_depth"]` to get the `[nx, ny, nz]` slice.
 """
 struct FeatureStack
     data::Array{Float64,4}
@@ -299,9 +151,7 @@ grid's horizontal cell centres, returning an `[nx, ny]` map.
 
 Weights are `1 / (d^power + s^power)`, so the smoothing length `s` (metres, by
 default the median horizontal cell size) keeps the interpolant finite at a
-station and sets the scale below which the field is flattened. Chosen over a
-triangulation because station layouts are often sparse and irregular and an
-extrapolating interpolant is more useful here than a hull-limited one.
+station and sets the scale below which the field is flattened.
 """
 function idw_to_grid(g::PriorGrid,
                      sx::AbstractVector{<:Real},
@@ -335,9 +185,7 @@ function idw_to_grid(g::PriorGrid,
     return out
 end
 
-# area-weighted separable Gaussian smoothing on a possibly non-uniform grid;
-# weighting by cell width is what keeps the result independent of how the mesh
-# grades, which an index-space kernel would not be
+# area-weighted separable Gaussian smoothing on a possibly non-uniform grid
 function _smooth_axis(M::AbstractMatrix{Float64}, centers::Vector{Float64},
                       widths::Vector{Float64}, σ::Float64, dim::Int)
     n = length(centers)
@@ -376,10 +224,7 @@ result the way an index-space kernel would.
 
 Weights are renormalised per output cell, which keeps a constant field exactly
 constant and avoids the darkening a truncated kernel would cause at the grid
-edge. The trade-off is that on a strongly graded mesh a lone spike can have its
-smoothed maximum land one cell off the spike, because the local weight sum
-differs between cells. Constant preservation matters more here: these channels
-are standardised afterwards, so an edge artefact would shift every statistic.
+edge.
 """
 function gaussian_smooth_xy(g::PriorGrid, M::AbstractMatrix{<:Real}, sigma_m::Real)
     nx, ny, _ = size(g)
@@ -428,254 +273,12 @@ function gradient_xy(g::PriorGrid, M::AbstractMatrix{<:Real})
     return dMdx, dMdy
 end
 
-# linear interpolation on a sorted abscissa, flat outside the range; duplicate
-# abscissa values collapse to the first of the pair
-function _interp_linear(xs::AbstractVector{<:Real}, ys::AbstractVector{<:Real}, x::Real)
-    n = length(xs)
-    n == 0 && throw(ArgumentError("_interp_linear: empty abscissa"))
-    n == 1 && return float(ys[1])
-    x <= xs[1] && return float(ys[1])
-    x >= xs[n] && return float(ys[n])
-    k = searchsortedlast(xs, x)
-    k = clamp(k, 1, n - 1)
-    dx = xs[k+1] - xs[k]
-    dx == 0 && return float(ys[k])
-    θ = (x - xs[k]) / dx
-    return (1 - θ) * ys[k] + θ * ys[k+1]
-end
-
-#---------- physics-derived baseline ----------
-
-"""
-    nb_baseline(g::PriorGrid, sites::MTSites; power=2.0, smoothing=nothing)
-        -> Array{Float64,3}
-
-Niblett-Bostick background model in log10 ohm-metres on the grid.
-
-Each site's sounding curve is transformed to a depth-resistivity profile, sampled
-at the grid's cell-centre depths by interpolating in log-depth, and the resulting
-columns are blended laterally by inverse-distance weighting.
-
-This is the level the MT data already constrains on its own. It serves two roles:
-a strong input channel, and the reference the network predicts a *residual*
-against, which is what keeps the learned part free of the absolute resistivity
-level of any one survey.
-"""
-function nb_baseline(g::PriorGrid, sites::MTSites;
-                     power::Real = 2.0,
-                     smoothing::Union{Nothing,Real} = nothing)
-    nx, ny, nz = size(g)
-    ns = nsites(sites)
-
-    depth = depth_below_top(g)
-    zc = [depth[1, 1, k] for k in 1:nz]
-    # log-depth sampling: MT resolution degrades geometrically with depth, so a
-    # linear interpolation in depth would over-weight the deep, poorly resolved end
-    log_zc = log10.(max.(zc, 1.0))
-
-    cols = Array{Float64}(undef, nz, ns)
-    @inbounds for t in 1:ns
-        d, ρ = niblett_bostick(sites.periods, view(sites.rho_a, :, t), view(sites.phase, :, t))
-        keep = findall(i -> d[i] > 0 && ρ[i] > 0, eachindex(d))
-        if isempty(keep)
-            cols[:, t] .= 0.0
-            continue
-        end
-        ld = log10.(d[keep])
-        lr = log10.(ρ[keep])
-        for k in 1:nz
-            cols[k, t] = _interp_linear(ld, lr, log_zc[k])
-        end
-    end
-
-    s = smoothing === nothing ? g.h_median : float(smoothing)
-    sp = s^power
-
-    out = Array{Float64}(undef, nx, ny, nz)
-    @inbounds for j in 1:ny, i in 1:nx
-        wsum = 0.0
-        w = Vector{Float64}(undef, ns)
-        for t in 1:ns
-            dist = hypot(g.cx[i] - sites.x[t], g.cy[j] - sites.y[t])
-            w[t] = 1.0 / (dist^power + sp)
-            wsum += w[t]
-        end
-        for k in 1:nz
-            acc = 0.0
-            for t in 1:ns
-                acc += w[t] * cols[k, t]
-            end
-            out[i, j, k] = acc / wsum
-        end
-    end
-    return out
-end
-
-"""
-    nb_baseline_lateral_std(baseline) -> Float64
-
-Sample standard deviation of depth-averaged columns of an NB baseline (or any
-`nx×ny×nz` log₁₀ρ field). Measures column-to-column lateral spread — the part of
-the baseline that varies between soundings — without using any truth model.
-"""
-function nb_baseline_lateral_std(baseline::AbstractArray{<:Real,3})
-    nx, ny, nz = size(baseline)
-    n = nx * ny
-    n == 0 && return 0.0
-    col_means = Vector{Float64}(undef, n)
-    t = 0
-    @inbounds for j in 1:ny, i in 1:nx
-        t += 1
-        s = 0.0
-        for k in 1:nz
-            s += Float64(baseline[i, j, k])
-        end
-        col_means[t] = s / nz
-    end
-    n < 2 && return 0.0
-    return std(col_means)
-end
-
-"""
-    residual_span_half_band(log_rho_bounds) -> Float64
-
-Permissive, truth-free residual span: half the physical log₁₀ρ band width.
-
-This is the Musgrave rule of thumb (`log_rho_bounds = (0.5, 4.5)` → span `2.0`):
-the network may reach anywhere inside the physical band from a mid-band baseline,
-without being told how far the truth sits from that baseline.
-"""
-function residual_span_half_band(log_rho_bounds::Tuple{Real,Real})
-    lo, hi = Float64(log_rho_bounds[1]), Float64(log_rho_bounds[2])
-    lo < hi || throw(ArgumentError(
-        "residual_span_half_band: log_rho_bounds must be increasing, got $(log_rho_bounds)"))
-    return 0.5 * (hi - lo)
-end
-
-"""
-    residual_span_from_baseline(baseline; k=3.0, floor=1.0, ceil=5.0) -> Float64
-
-Data-driven residual span from lateral NB spread: `clamp(k · σ_lat, floor, ceil)`,
-where `σ_lat` is [`nb_baseline_lateral_std`](@ref).
-
-Portable to field surveys (no truth). `k` is an external multiplier, not fit to
-truth; `floor` / `ceil` keep the reachable band usable when the baseline is
-almost uniform or wildly variable.
-"""
-function residual_span_from_baseline(baseline::AbstractArray{<:Real,3};
-                                     k::Real = 3.0,
-                                     floor::Real = 1.0,
-                                     ceil::Real = 5.0)
-    k > 0 || throw(ArgumentError("residual_span_from_baseline: k must be positive"))
-    floor > 0 || throw(ArgumentError("residual_span_from_baseline: floor must be positive"))
-    ceil >= floor || throw(ArgumentError(
-        "residual_span_from_baseline: ceil must be ≥ floor, got floor=$(floor) ceil=$(ceil)"))
-    span = float(k) * nb_baseline_lateral_std(baseline)
-    return clamp(span, float(floor), float(ceil))
-end
-
 #---------- channel builders ----------
 
-# default multi-scale smoothing lengths, as multiples of the median horizontal
-# cell size; separating wavelengths is how a gravity map hints at source depth
-const DEFAULT_GRAVITY_SCALES = (2.0, 5.0, 12.0)
-
-"""
-    gravity_cell_sensitivity(g::PriorGrid, obs::GravityObs; units=:mgal)
-        -> Array{Float64,3}
-
-[`gravity_cell_sensitivity`](@ref) from a [`GravityObs`](@ref) station set.
-"""
-gravity_cell_sensitivity(g::PriorGrid, obs::GravityObs; kwargs...) =
-    gravity_cell_sensitivity(g, obs.x, obs.y, obs.z; kwargs...)
-
-"""
-    gravity_sensitivity_channel(g::PriorGrid, obs::GravityObs) -> Array{Float64,3}
-
-Depth-aware gravity feature: prism-kernel sensitivity *per unit volume*,
-modulated by the interpolated surface anomaly, then standardised in-survey.
-
-Unlike the extruded maps in [`gravity_channels`](@ref), this field varies with
-depth. [`gravity_cell_sensitivity`](@ref) is the column L2 of
-[`gravity_matrix`](@ref) — how much that *cell* moves the stations, which grows
-with cell volume. Dividing by [`cell_volumes`](@ref) recovers an
-upward-continuation-style decay: a given density contrast at depth z contributes
-less than the same contrast near the surface, even when deep cells are thicker.
-A kernel-only map (no anomaly) would be almost a 1-D depth function on a
-well-covered profile (redundant with `log_depth`); the product is what gives
-the network a z-dependent gravity *location*.
-
-The kernel is the same operator as [`gravity_matrix`](@ref) / [`synth_gravity`](@ref).
-OPERATOR inverse crime exists if this channel is later trained against a loss
-that uses that operator; the channel does not remove it. Slab density still
-does not pass through [`density_from_mu`](@ref) — no petrophysical inverse crime.
-"""
-function gravity_sensitivity_channel(g::PriorGrid, obs::GravityObs)
-    nx, ny, nz = size(g)
-    sens = gravity_cell_sensitivity(g, obs)
-    vol = cell_volumes(g)
-    anomaly = idw_to_grid(g, obs.x, obs.y, obs.value)
-    raw = Array{Float64,3}(undef, nx, ny, nz)
-    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-        raw[i, j, k] = (sens[i, j, k] / vol[i, j, k]) * anomaly[i, j]
-    end
-    return standardize(raw)
-end
-
-"""
-    gravity_channels(g::PriorGrid, obs::GravityObs; scales=DEFAULT_GRAVITY_SCALES,
-                     sensitivity=false) -> (Vector{Array{Float64,3}}, Vector{String})
-
-Feature channels derived from a gravity survey: the standardised anomaly, its two
-horizontal gradients, and one band-pass channel per entry in `scales`.
-
-`scales` are Gaussian smoothing lengths in multiples of the median horizontal
-cell size. Each band-pass channel is the difference between successively smoothed
-versions, so short and long wavelengths land in separate channels; a deep source
-shows up only in the long ones, which is the closest a single gravity map gets to
-depth information. Every one of those maps is extruded through depth — they do
-not vary with `z`.
-
-When `sensitivity=true`, appends one extra channel `"gravity_sensitivity"`:
-per-volume prism-kernel sensitivity times the interpolated surface anomaly
-(see [`gravity_sensitivity_channel`](@ref)). Default `false` keeps the historical
-channel count.
-"""
-function gravity_channels(g::PriorGrid, obs::GravityObs;
-                          scales = DEFAULT_GRAVITY_SCALES,
-                          sensitivity::Bool = false)
-    nx, ny, nz = size(g)
-    h = g.h_median
-
-    raw = idw_to_grid(g, obs.x, obs.y, obs.value)
-    chans = Array{Float64,3}[]
-    names = String[]
-
-    push!(chans, extrude(standardize(raw), nz))
-    push!(names, "gravity")
-
-    gx, gy = gradient_xy(g, standardize(raw))
-    push!(chans, extrude(standardize(gx), nz)); push!(names, "gravity_dx")
-    push!(chans, extrude(standardize(gy), nz)); push!(names, "gravity_dy")
-
-    prev = standardize(raw)
-    for (n, m) in enumerate(scales)
-        σ = float(m) * h
-        smoothed = gaussian_smooth_xy(g, standardize(raw), σ)
-        push!(chans, extrude(standardize(prev .- smoothed), nz))
-        push!(names, "gravity_band$(n)")
-        prev = smoothed
-    end
-    push!(chans, extrude(standardize(prev), nz))
-    push!(names, "gravity_long")
-
-    if sensitivity
-        push!(chans, gravity_sensitivity_channel(g, obs))
-        push!(names, "gravity_sensitivity")
-    end
-
-    return chans, names
-end
+# Geometric depth scale: skin depth of a reference half-space. Used only as a
+# dimensionless depth channel (`depth_over_skin`), not as an MT solver.
+const _MU0 = 4π * 1e-7
+_skin_depth(rho::Real, T::Real) = sqrt(2 * rho * T / (2π * _MU0))
 
 """
     topography_channels(g::PriorGrid, surface_z) -> (Vector{Array{Float64,3}}, Vector{String})
@@ -683,8 +286,7 @@ end
 Feature channels from the ground surface: the standardised surface height and the
 depth of each cell below the surface, normalised by the grid's depth extent.
 
-`surface_z` is an `[nx, ny]` map of the ground surface in the grid's frame
-(metres, `z` positive down), as produced by `MTGeophysics.extract_topography`.
+`surface_z` is an `[nx, ny]` map of the ground surface in the grid's frame.
 """
 function topography_channels(g::PriorGrid, surface_z::AbstractMatrix{<:Real})
     nx, ny, nz = size(g)
@@ -713,12 +315,8 @@ end
         -> (Vector{Array{Float64,3}}, Vector{String})
 
 Depth channels: standardised log-depth, and depth divided by the skin depth of a
-`rho_ref` half-space at `period_max`.
-
-The second channel is the important one. It states depth in units of how deep the
-data can actually see, so a shallow high-frequency survey and a deep long-period
-one present the same numbers to the network for cells that are equally well
-resolved.
+`rho_ref` half-space at `period_max`. The second channel is a geometric scale
+so surveys of different size present comparable numbers; it is not an MT input.
 """
 function depth_channels(g::PriorGrid; rho_ref::Real = 100.0, period_max::Real = 1000.0)
     rho_ref > 0 || throw(ArgumentError("depth_channels: rho_ref must be positive"))
@@ -733,7 +331,7 @@ function depth_channels(g::PriorGrid; rho_ref::Real = 100.0, period_max::Real = 
     push!(chans, standardize(log10.(max.(d, d0) ./ d0)))
     push!(names, "log_depth")
 
-    δ = skin_depth(rho_ref, period_max)
+    δ = _skin_depth(rho_ref, period_max)
     push!(chans, d ./ δ)
     push!(names, "depth_over_skin")
 
@@ -741,26 +339,20 @@ function depth_channels(g::PriorGrid; rho_ref::Real = 100.0, period_max::Real = 
 end
 
 """
-    coverage_channels(g::PriorGrid, sx, sy, sz=nothing; name="site_distance")
+    coverage_channels(g::PriorGrid, sx, sy, sz=nothing; name="sample_distance")
         -> (Vector{Array{Float64,3}}, Vector{String})
 
 Distance from each cell to the nearest sample, in units of the median horizontal
 cell size, passed through `log1p`.
 
-Tells the network where the data has something to say. Far from every site the
-prior should widen rather than invent structure, and this is the channel that
-lets `sigma` learn to do that.
-
 With `sz === nothing` the distance is plan-view and the map is extruded through
-depth, matching the original MT-site channel. Passing `sz` makes the distance
-fully 3-D, so a deep cell can sit far from a shallow sample even when they share
-an (x, y).
+depth. Passing `sz` makes the distance fully 3-D.
 """
 function coverage_channels(g::PriorGrid,
                            sx::AbstractVector{<:Real},
                            sy::AbstractVector{<:Real},
                            sz::Union{Nothing,AbstractVector{<:Real}} = nothing;
-                           name::AbstractString = "site_distance")
+                           name::AbstractString = "sample_distance")
     length(sx) == length(sy) ||
         throw(ArgumentError("coverage_channels: sx and sy must have equal length"))
     isempty(sx) && throw(ArgumentError("coverage_channels: need at least one site"))
@@ -798,8 +390,6 @@ function coverage_channels(g::PriorGrid,
     return Array{Float64,3}[near], String[String(name)]
 end
 
-# nearest sample index per (i, j) in plan view, or per cell in 3-D. `mask` selects
-# which samples compete; an all-false mask returns zeros (no neighbour)
 function _nearest_index_map(g::PriorGrid,
                             sx::AbstractVector{<:Real},
                             sy::AbstractVector{<:Real},
@@ -875,11 +465,8 @@ end
 Nearest-neighbour interpolation of [`PointSamples`](@ref) onto the grid.
 
 Each channel is interpolated independently: a sample that is missing (non-finite)
-in one column does not compete for that column, so a copper-only station does
-not paint a nickel channel. Empty channels (no finite samples) are dropped.
-
-When `standardize_values` is true, each interpolated field is then standardised
-in-survey, matching [`gravity_channels`](@ref).
+in one column does not compete for that column. Empty channels (no finite
+samples) are dropped.
 """
 function nearest_sample_channels(g::PriorGrid, samples::PointSamples;
                                  standardize_values::Bool = true)
@@ -931,7 +518,6 @@ end
 function _lith_token(label::AbstractString)
     raw = String(label)
     if !isvalid(raw)
-        # Latin-1 bytes from dBase (e.g. Ä = 0xC4) survive as U+00xx
         raw = String(Char.(codeunits(raw)))
     end
     token = uppercase(strip(raw))
@@ -947,10 +533,7 @@ end
 One-hot lithology channels from nearest-sample labels.
 
 Classes whose share of the sample set is below `min_frequency` collapse to
-`OTHER`, so a 200-way rock-type vocabulary does not explode the feature width.
-The resulting 0/1 fields are *not* standardised: a one-hot bit is already on a
-fixed scale, and shifting it by its class frequency would mix prevalence into
-every cell.
+`OTHER`. The resulting 0/1 fields are *not* standardised.
 """
 function lithology_channels(g::PriorGrid, samples::LabelSamples;
                             min_frequency::Real = 0.01)
@@ -984,44 +567,24 @@ function lithology_channels(g::PriorGrid, samples::LabelSamples;
 end
 
 """
-    build_features(g::PriorGrid; gravity=nothing, surface_z=nothing, sites=nothing,
-                   baseline=nothing, coordinates=true, rho_ref=100.0,
-                   gravity_scales=DEFAULT_GRAVITY_SCALES,
-                   gravity_sensitivity=false, geochemistry=nothing,
-                   lithology=nothing, coverage_points=nothing,
-                   lithology_min_frequency=0.01) -> FeatureStack
+    build_features(g::PriorGrid; surface_z=nothing, coordinates=true,
+                   rho_ref=100.0, geochemistry=nothing, lithology=nothing,
+                   coverage_points=nothing, lithology_min_frequency=0.01)
+        -> FeatureStack
 
 Assemble the available data into a feature tensor.
 
-Every input is optional so the same call works on a survey with gravity but no
-topography, or sites but no gravity; only the channels that can be built are
-included. `coordinates = true` appends the normalised cell-centre coordinates,
-which anchor a per-survey neural field but must be dropped when training a model
-intended to transfer between surveys.
+Every input is optional; only the channels that can be built are included.
+`coordinates = true` appends the normalised cell-centre coordinates.
 
-`baseline` is a `[nx, ny, nz]` log10 resistivity background, normally the output
-of [`nb_baseline`](@ref); when `sites` is given and `baseline` is not, it is
-computed automatically.
-
-`gravity_sensitivity` defaults to `false`, which keeps the historical gravity
-channel count (extruded surface maps only). Set `true` to append the depth-aware
-`"gravity_sensitivity"` channel; ignored when `gravity` is not supplied.
-
-`geochemistry` and `lithology` are the non-geophysical inputs used by the
-Keivitsa training line: nearest-sample interpolation of assay/till chemistry and
-one-hot rock type. `coverage_points` is a named tuple `(x, y)` or `(x, y, z)` of
-those same samples, producing a `"sample_distance"` channel analogous to the MT
-`"site_distance"` map.
+`geochemistry` and `lithology` are nearest-sample interpolations.
+`coverage_points` is a named tuple `(x, y)` or `(x, y, z)` producing a
+`"sample_distance"` channel.
 """
 function build_features(g::PriorGrid;
-                        gravity::Union{Nothing,GravityObs} = nothing,
                         surface_z::Union{Nothing,AbstractMatrix{<:Real}} = nothing,
-                        sites::Union{Nothing,MTSites} = nothing,
-                        baseline::Union{Nothing,AbstractArray{<:Real,3}} = nothing,
                         coordinates::Bool = true,
                         rho_ref::Real = 100.0,
-                        gravity_scales = DEFAULT_GRAVITY_SCALES,
-                        gravity_sensitivity::Bool = false,
                         geochemistry::Union{Nothing,PointSamples} = nothing,
                         lithology::Union{Nothing,LabelSamples} = nothing,
                         coverage_points::Union{Nothing,NamedTuple} = nothing,
@@ -1036,27 +599,11 @@ function build_features(g::PriorGrid;
         append!(names, ("x_norm", "y_norm", "z_norm"))
     end
 
-    period_max = sites === nothing ? 1000.0 : maximum(sites.periods)
-    ref = rho_ref
-    if sites !== nothing && all(isfinite, sites.rho_a) && !isempty(sites.rho_a)
-        ref = median(sites.rho_a)
-    end
-    c, n = depth_channels(g; rho_ref = ref, period_max = period_max)
+    c, n = depth_channels(g; rho_ref = rho_ref)
     append!(chans, c); append!(names, n)
-
-    if gravity !== nothing
-        c, n = gravity_channels(g, gravity; scales = gravity_scales,
-                                sensitivity = gravity_sensitivity)
-        append!(chans, c); append!(names, n)
-    end
 
     if surface_z !== nothing
         c, n = topography_channels(g, surface_z)
-        append!(chans, c); append!(names, n)
-    end
-
-    if sites !== nothing
-        c, n = coverage_channels(g, sites.x, sites.y)
         append!(chans, c); append!(names, n)
     end
 
@@ -1079,17 +626,6 @@ function build_features(g::PriorGrid;
         append!(chans, c); append!(names, n)
     end
 
-    base = baseline
-    if base === nothing && sites !== nothing
-        base = nb_baseline(g, sites)
-    end
-    if base !== nothing
-        size(base) == (nx, ny, nz) || throw(DimensionMismatch(
-            "build_features: baseline must be $(nx)x$(ny)x$(nz), got $(size(base))"))
-        push!(chans, standardize(base))
-        push!(names, "baseline")
-    end
-
     isempty(chans) && throw(ArgumentError(
         "build_features: no data supplied, nothing to build"))
 
@@ -1105,7 +641,7 @@ end
 
 Concatenate extra `[nx,ny,nz]` channels onto an existing stack. Used by the
 Cloncurry line to add structural-geology maps without threading them through
-[`build_features`](@ref)'s gravity/MT kwargs.
+[`build_features`](@ref).
 """
 function append_channels(s::FeatureStack,
                          chans::AbstractVector{<:AbstractArray{<:Real,3}},
