@@ -10,8 +10,8 @@
 # `prior.rho` alone is already useful and needs no change to MTGeophysics.jl:
 # VFSA3DMT takes a start-model path, and swapping a half-space for this is the
 # whole of the mu half of the idea. The bound files need a solver that accepts
-# per-cell limits, which is what BoundedVFSA.jl provides and what the upstream
-# `log_bounds` patch would add.
+# per-cell limits; MTGeophysics v0.5.0 `log_bounds` is scalar-only, so
+# `prior.lo` / `prior.hi` are written for inspection only.
 #
 # The naming deliberately echoes the `model.mean` / `model.std` files that
 # MTGeophysics' own AnalyseEnsemble3D writes, so the two sets of outputs can sit

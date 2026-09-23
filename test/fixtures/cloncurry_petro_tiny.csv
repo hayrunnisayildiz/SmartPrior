@@ -1,7 +1,7 @@
-sample,deposit,easting_gda94_mga54_m,northing_gda94_mga54_m,sample_elevation_asl_m,lithology_code,density_mean_g_cm3,density_mean_kg_m3,susceptibility_mean_SI,conductivity_mean_S_m_100kHz
-S1,Ernest Henry,1005,2005,-10,MSD,2.80,2800,0.10,1.0
-S2,Ernest Henry,1015,2015,-20,,,,0.05,0.0
-S3,Monakoff,1025,2025,-30,BRX,3.10,3100,,
-S4,Cannington,9999,2005,-10,PSAM,2.70,2700,0.02,0.5
-S5,Ernest Henry,1035,2035,-40,MSD,3.50,3500,1.0,10.0
-S5b,Ernest Henry,1036,2036,-41,MSD,3.51,3509.9,1.1,11.0
+sample,deposit,drillhole,easting_gda94_mga54_m,northing_gda94_mga54_m,sample_elevation_asl_m,lithology_code,density_mean_g_cm3,density_mean_kg_m3,susceptibility_mean_SI,conductivity_mean_S_m_100kHz
+S1,Ernest Henry,EH1,1005,2005,-10,MSD,2.80,2800,0.10,1.0
+S2,Ernest Henry,EH1,1015,2015,-20,,,,0.05,0.0
+S3,Monakoff,MON1,1025,2025,-30,BRX,3.10,3100,,
+S4,Cannington,CAN1,9999,2005,-10,PSAM,2.70,2700,0.02,0.5
+S5,Ernest Henry,EH2,1035,2035,-40,MSD,3.50,3500,1.0,10.0
+S5b,Ernest Henry,EH2,1036,2036,-41,MSD,3.51,3509.9,1.1,11.0

@@ -35,7 +35,6 @@ export build_musgrave_profile, build_musgrave_datafile2d, build_musgrave_gravity
        build_musgrave_mesh, build_musgrave_surface_z, musgrave_phase_tensor_skew
 
 using MTGeophysics: BuildMesh2D, MT2DMesh, DataFile2D
-using ArchGDAL
 
 """
     read_musgrave_edi(path) -> NamedTuple

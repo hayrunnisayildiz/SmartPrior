@@ -1101,6 +1101,36 @@ function build_features(g::PriorGrid;
 end
 
 """
+    append_channels(s::FeatureStack, chans, names) -> FeatureStack
+
+Concatenate extra `[nx,ny,nz]` channels onto an existing stack. Used by the
+Cloncurry line to add structural-geology maps without threading them through
+[`build_features`](@ref)'s gravity/MT kwargs.
+"""
+function append_channels(s::FeatureStack,
+                         chans::AbstractVector{<:AbstractArray{<:Real,3}},
+                         names::AbstractVector{<:AbstractString})
+    length(chans) == length(names) || throw(ArgumentError(
+        "append_channels: $(length(chans)) channels but $(length(names)) names"))
+    isempty(chans) && return s
+    nx, ny, nz, nc0 = size(s.data)
+    for (ch, name) in zip(chans, names)
+        size(ch) == (nx, ny, nz) || throw(DimensionMismatch(
+            "append_channels: channel $(repr(name)) is $(size(ch)), " *
+            "expected ($nx, $ny, $nz)"))
+        name in s.names && throw(ArgumentError(
+            "append_channels: duplicate channel name $(repr(name))"))
+    end
+    nc = nc0 + length(chans)
+    data = Array{Float64,4}(undef, nx, ny, nz, nc)
+    @inbounds data[:, :, :, 1:nc0] .= s.data
+    @inbounds for (k, ch) in enumerate(chans)
+        data[:, :, :, nc0 + k] .= ch
+    end
+    return FeatureStack(data, vcat(s.names, String.(names)))
+end
+
+"""
     feature_matrix(s::FeatureStack) -> Matrix{Float64}
 
 Reshape a stack to `[nchannel, ncell]`, the layout Lux dense layers expect.

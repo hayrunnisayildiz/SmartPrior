@@ -10,7 +10,6 @@ using SmartPriorMT
     include("TestLosses.jl")
     include("TestTrain.jl")
     include("TestExport.jl")
-    include("TestBoundedVFSA.jl")
     include("TestSynthetic.jl")
     include("TestMetrics.jl")
     include("TestProfile2D.jl")

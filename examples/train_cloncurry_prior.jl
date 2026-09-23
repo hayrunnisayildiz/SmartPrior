@@ -2,22 +2,25 @@
 #
 # Separate from examples/compare_prior_2d.jl and from the Keivitsa scripts:
 # no gravity, no magnetics, no MT, no VFSA. Features are pXRF geochemistry
-# (Cu held out) and lithology_code; anchors are Cu_Concentration plus
-# density / susceptibility / conductivity_100kHz (KT-20, 100 kHz specimen
-# conductivity — not MT bulk resistivity).
+# (Cu held out), lithology_code, structural geology (fault/line distance +
+# surface-map dom_rock / rock_type one-hots), and sample coverage. Anchors are
+# Cu_Concentration plus density / susceptibility / conductivity_100kHz
+# (KT-20, 100 kHz specimen conductivity — not MT bulk resistivity).
 #
-# Default cell size is coarse. The work area is ~42 × 76 km; a 25 m mesh
-# is not a first-run setting. See the grid-proposal table printed at start.
+# Default cell size is coarse. The district sample AABB is ~118 × 219 km;
+# a 25 m mesh is not a first-run setting. See the grid-proposal table.
 #
 # Run:  julia --project=. examples/train_cloncurry_prior.jl
-# Env:  CLONCURRY_ROOT, SMARTPRIOR_WORK, SMARTPRIOR_BOX (work | ernest_henry),
-#       SMARTPRIOR_CELL_M, SMARTPRIOR_CELL_Z, SMARTPRIOR_EPOCHS,
-#       SMARTPRIOR_LOG_EVERY, SMARTPRIOR_TRAIN_SEED, SMARTPRIOR_WIDTH,
-#       SMARTPRIOR_DEPTH
+# Env:  CLONCURRY_ROOT, SMARTPRIOR_WORK,
+#       SMARTPRIOR_BOX (district | samples | work | ernest_henry),
+#       SMARTPRIOR_CELL_M, SMARTPRIOR_CELL_Z, SMARTPRIOR_TARGET_CELLS,
+#       SMARTPRIOR_EPOCHS, SMARTPRIOR_LOG_EVERY, SMARTPRIOR_TRAIN_SEED,
+#       SMARTPRIOR_WIDTH, SMARTPRIOR_DEPTH
 #
-# Spatial hold-out of Cu labels (train vs test RMSE): see
+# Drillhole hold-out of all four property labels (train vs test RMSE): see
 # examples/holdout_cloncurry_prior.jl. Do not treat a full-data RMSE as
-# generalization.
+# generalization. District default is ~70/15/15 of named collars. The older
+# 191/45/19 draft was Cu sample counts on Ernest Henry only.
 
 using SmartPriorMT
 using Printf
@@ -26,15 +29,16 @@ using Statistics
 
 const ROOT = dirname(@__DIR__)
 const WORK = get(ENV, "SMARTPRIOR_WORK", joinpath(ROOT, "tmp_cloncurry_prior"))
-const CELL = parse(Float64, get(ENV, "SMARTPRIOR_CELL_M", "1000"))
-const CELL_Z = parse(Float64, get(ENV, "SMARTPRIOR_CELL_Z", "100"))
+const CELL_ENV = strip(get(ENV, "SMARTPRIOR_CELL_M", ""))
+const CELL_Z_ENV = strip(get(ENV, "SMARTPRIOR_CELL_Z", ""))
+const TARGET_CELLS = parse(Int, get(ENV, "SMARTPRIOR_TARGET_CELLS", "50000"))
 const EPOCHS = parse(Int, get(ENV, "SMARTPRIOR_EPOCHS", "50"))
 const LOG_EVERY = parse(Int, get(ENV, "SMARTPRIOR_LOG_EVERY",
                                  string(max(1, EPOCHS ÷ 10))))
 const TRAIN_SEED = parse(Int, get(ENV, "SMARTPRIOR_TRAIN_SEED", "2026"))
 const WIDTH = parse(Int, get(ENV, "SMARTPRIOR_WIDTH", "256"))
 const DEPTH = parse(Int, get(ENV, "SMARTPRIOR_DEPTH", "4"))
-const BOX = lowercase(strip(get(ENV, "SMARTPRIOR_BOX", "work")))
+const BOX = lowercase(strip(get(ENV, "SMARTPRIOR_BOX", "district")))
 const CUTOFF_PPM = 5000.0
 mkpath(WORK)
 
@@ -122,19 +126,44 @@ function print_grid_proposal(bounds; title = "grid")
 end
 
 const DATASET = default_cloncurry_root()
-@info "Cloncurry paths" DATASET WORK BOX CELL CELL_Z EPOCHS LOG_EVERY WIDTH DEPTH
 
 samples = load_cloncurry_samples(DATASET)
-bounds = if BOX in ("work", "h")
+raw_bounds = if BOX in ("work", "h")
     cloncurry_work_bounds()
 elseif BOX in ("ernest_henry", "eh", "d")
     cloncurry_deposit_bounds(samples, "Ernest Henry")
+elseif BOX in ("district", "samples", "aabb")
+    cloncurry_sample_bounds(samples)
 else
-    error("SMARTPRIOR_BOX must be work or ernest_henry, got $(repr(BOX))")
+    error("SMARTPRIOR_BOX must be district, work, or ernest_henry, got $(repr(BOX))")
 end
+district_box = BOX in ("district", "samples", "aabb")
+spacing = cloncurry_district_spacing(raw_bounds; target = TARGET_CELLS)
+CELL = isempty(CELL_ENV) ? (district_box ? spacing.cell : 1000.0) : parse(Float64, CELL_ENV)
+CELL_Z = isempty(CELL_Z_ENV) ? (district_box ? spacing.cell_z : 100.0) : parse(Float64, CELL_Z_ENV)
+bounds = if district_box
+    cloncurry_sample_bounds(samples; pad_xy = CELL / 2, pad_z = CELL_Z / 2)
+else
+    raw_bounds
+end
+@info "Cloncurry paths" DATASET WORK BOX CELL CELL_Z EPOCHS LOG_EVERY WIDTH DEPTH TARGET_CELLS
 print_grid_proposal(bounds; title = "grid box $(BOX)")
 grid = cloncurry_grid(bounds; cell = CELL, cell_z = CELL_Z)
 @info "prior grid" size(grid) ncells(grid) dx = grid.dx[1] dy = grid.dy[1] dz = grid.dz[1] bounds
+if district_box
+    work = cloncurry_work_bounds()
+    n_xyz = cloncurry_sample_bounds(samples).n_samples
+    n_work = count(i -> isfinite(samples.east[i]) && isfinite(samples.north[i]) &&
+                       isfinite(samples.elev[i]) &&
+                       work.x_min <= samples.east[i] <= work.x_max &&
+                       work.y_min <= samples.north[i] <= work.y_max &&
+                       work.z_min <= samples.elev[i] <= work.z_max,
+                   1:length(samples))
+    @printf("  sample AABB covers %d finite-xyz rows; work box covers %d\n",
+            n_xyz, n_work)
+    @printf("  spacing vs target   %.0f m × %.0f m  → ~%d cells (target %d; Keivitsa ~23800)\n",
+            spacing.cell, spacing.cell_z, spacing.ncells, TARGET_CELLS)
+end
 
 #---------- 1. samples, features ----------
 
@@ -151,8 +180,14 @@ stack = build_features(grid;
                        geochemistry = geochem,
                        lithology = lith,
                        coverage_points = coverage)
+struct_c, struct_n = structure_distance_channels(grid, DATASET)
+surf_c, surf_n = surface_geology_channels(grid, DATASET)
+stack = append_channels(stack, struct_c, struct_n)
+stack = append_channels(stack, surf_c, surf_n)
 X = encode_features(stack; n_bands = 4)
 @info "features" nchannels(stack) size(X) names = stack.names
+@info "structure channels" names = struct_n
+@info "surface geology channels" names = surf_n
 
 #---------- 2. anchors ----------
 
@@ -371,6 +406,8 @@ open(joinpath(WORK, "cloncurry_prior_report.txt"), "w") do io
             "\tcell_xy=", CELL, "\tcell_z=", CELL_Z, "\tdz=", grid.dz[1])
     println(io, "geochem_channels\t", join(geochem.names, ","))
     println(io, "geochem_n\t", length(geochem))
+    println(io, "structure_channels\t", join(struct_n, ","))
+    println(io, "surface_geology_channels\t", join(surf_n, ","))
     println(io, "feature_names\t", join(stack.names, ","))
     println(io, "grade_cells\t", length(anchors.grade[1]))
     println(io, "density_cells\t", length(anchors.density[1]))

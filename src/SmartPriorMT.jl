@@ -25,16 +25,12 @@ physics: a closed-form prism gravity operator and an AD-safe 1D MT recursion.
   amplitude (model RMSE) shows no consistent gain, and a 4-scenario sweep
   shows the prior underperforms a naive baseline in dip55/resistive-contrast
   geologies.
-- **Per-cell search-interval narrowing (`sigma`, via `BoundedVFSA.jl`): not
-  connected to a real solver run, and not possible in this MTGeophysics
-  version.** `prior_bounds` and `BoundedVFSA.jl` compute and report what the
-  per-cell bounds *would* narrow the search to (`bound_report`), but
+- **Per-cell search-interval narrowing (`sigma`): abandoned.**
+  `prior_bounds` still writes `prior.lo` / `prior.hi` for inspection, but
   MTGeophysics v0.5.0's `VFSA2DMTConfig`/`VFSA3DMTConfig.log_bounds` only
-  accepts a scalar `Tuple{Float64,Float64}` -- confirmed by inspecting
-  `_propose_controls!`/`clamp.` and by `MethodError` on an array-valued
-  `log_bounds`. Every real run so far uses one scalar interval for the whole
-  grid. This is an MTGeophysics API gap, not a SmartPriorMT bug; see
-  `BoundedVFSA.jl`'s docstring.
+  accepts a scalar `Tuple{Float64,Float64}`. Every real run uses one scalar
+  interval for the whole grid. The experimental cell-indexed proposal helpers
+  were removed; this direction is closed.
 - **3D warm start (WS3D export via `write_prior`, `VFSA3DMT`): not implemented
   or validated, and currently out of scope.** No test or example in this
   package calls a 3D MTGeophysics inversion. `write_prior` writes `mu` (log10
@@ -65,6 +61,7 @@ import JLD2
 import Optimisers
 import Zygote
 
+using ArchGDAL
 using CodecZlib
 using MTGeophysics: WS3DModel, load_ws3d_model, write_ws3d_model
 using MTGeophysics: RBFMap, build_rbf_map, apply_rbf_map!
@@ -79,7 +76,6 @@ include("PriorNet.jl")
 include("Losses.jl")
 include("Train.jl")
 include("Export.jl")
-include("BoundedVFSA.jl")
 include("Synthetic.jl")
 include("Metrics.jl")
 include("Profile2D.jl")
@@ -105,6 +101,7 @@ export standardize, extrude, idw_to_grid, gaussian_smooth_xy, gradient_xy
 export gravity_channels, topography_channels, depth_channels, coverage_channels
 export gravity_sensitivity_channel
 export nearest_sample_channels, geochemistry_channels, lithology_channels
+export append_channels
 
 # neural field
 export PriorNet, setup_prior, predict, predict_grid
@@ -155,11 +152,17 @@ export KEIVITSA_PETRO_STATUS, KEIVITSA_GEOCHEM_PRIORITY, KEIVITSA_DRILL_GEOCHEM
 # Cloncurry–Ernest Henry non-geophysical prior line
 export CloncurrySamples, load_cloncurry_samples
 export cloncurry_derived_dir, cloncurry_petrophysics_path, cloncurry_metals_path
-export cloncurry_work_bounds, cloncurry_deposit_bounds, cloncurry_grid
+export cloncurry_work_bounds, cloncurry_deposit_bounds, cloncurry_sample_bounds
+export cloncurry_district_spacing, cloncurry_grid
 export cloncurry_geochemistry, cloncurry_lithology, cloncurry_coverage_points
 export cloncurry_property_coverage, load_cloncurry_anchors
-export cloncurry_grade_eligible, spatial_holdout
+export cloncurry_grade_eligible, cloncurry_inside_mask, spatial_holdout, group_holdout
+export cloncurry_group_keys, group_mask
+export cloncurry_geology_dir, cloncurry_structures_path, cloncurry_surface_geology_path
+export load_cloncurry_structures, load_cloncurry_surface_geology
+export structure_distance_channels, surface_geology_channels
 export CLONCURRY_PROPERTY_NAMES, CLONCURRY_GEOCHEM_ELEMENTS
+export CLONCURRY_SULFIDE_INDEX_ELEMENTS, CLONCURRY_GEOCHEM_RATIOS
 export CLONCURRY_CONDUCTIVITY_STATUS, CLONCURRY_WORK_BOUNDS
 export CLONCURRY_CU_DL_PPM, CLONCURRY_COND_FLOOR_S_M
 

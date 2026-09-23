@@ -1,7 +1,8 @@
 # Cloncurry–Ernest Henry (METAL / GDA94 MGA zone 54) readers for the
 # non-geophysical prior line. Gravity, magnetics and MT are not opened here
-# even though they sit in the same package; the network sees pXRF geochemistry
-# and lithology as features, and Cu plus petrophysics as anchors.
+# even though they sit in the same package; the network sees pXRF geochemistry,
+# lithology, and structural geology (fault/line distance + surface-map
+# one-hots) as features, and Cu plus petrophysics as anchors.
 #
 # Coordinate convention matches KeivitsaIO: x = easting, y = northing,
 # z = elevation (positive up, metres ASL). EPSG:28354.
@@ -14,6 +15,15 @@ const CLONCURRY_GEOCHEM_ELEMENTS = (
     "Ni", "Zn", "As", "Se", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Ag", "Cd",
     "Sn", "Sb", "W", "Hg", "Pb", "Bi", "Th", "U",
 )
+# Multi-element sulfide endowment (ppm). Geometric mean equalises Fe (~wt%)
+# vs S/Zn/Pb (ppm); a raw sum is Fe-dominated. Cu is the grade target and is
+# never included (same leakage rule as raw geochem). Literature proxy for
+# sulfide density / conductivity association in IOCG–sulfide systems.
+const CLONCURRY_SULFIDE_INDEX_ELEMENTS = ("S", "Fe", "Zn", "Pb")
+# Cloncurry pathfinders (Keivitsa-style num/den). Ni/Cu and Pd/Ni are not
+# available: Cu is held out, Pd is absent from the pXRF suite. Fe/S tracks
+# oxide vs sulfide iron; As/S and Zn/Pb are district base-metal pathfinders.
+const CLONCURRY_GEOCHEM_RATIOS = (("As", "S"), ("Zn", "Pb"), ("Fe", "S"))
 const CLONCURRY_CU_DL_PPM = 1.0
 # KT-20 100 kHz specimen conductivity. 711 / 1250 finite values are exact 0;
 # the smallest positive in the 2026-09-17 dump is 0.02055 S/m. Zeros are lifted
@@ -42,11 +52,13 @@ const CLONCURRY_CONDUCTIVITY_STATUS =
 Row-aligned METAL petrophysics + pXRF geochemistry. One row per specimen
 (1,590 in the 2026-09-17 dump, including a duplicated `E1-284` kept twice).
 `cu_ppm` is the grade target (NaN if the cell was empty, detection-limit if
-`<LOD`). Geochemistry columns never include Cu.
+`<LOD`). Geochemistry columns never include Cu. `drillhole` is the collar
+id used as the hold-out group; a blank id is treated as its own group.
 """
 struct CloncurrySamples
     sample::Vector{String}
     deposit::Vector{String}
+    drillhole::Vector{String}
     east::Vector{Float64}
     north::Vector{Float64}
     elev::Vector{Float64}
@@ -213,6 +225,76 @@ function cloncurry_deposit_bounds(s::CloncurrySamples, deposit::AbstractString;
 end
 
 """
+    cloncurry_sample_bounds(s; pad_xy=0, pad_z=0) -> NamedTuple
+
+Axis-aligned MGA54 box around every finite-xyz sample, any deposit.
+Tighter than [`cloncurry_work_bounds`](@ref) *only if* the samples sit
+inside that proposal box; on the 2026-09-17 dump they do not (AABB
+~118 × 219 km vs the 42 × 76 km work box, which drops ~1,100 samples).
+A Cartesian prior grid cannot be a convex hull — this AABB is the
+smallest axis-aligned box and therefore the fewest empty cells among
+rectangles that still hold every sample.
+"""
+function cloncurry_sample_bounds(s::CloncurrySamples;
+                                 pad_xy::Real = 0.0, pad_z::Real = 0.0)
+    pad_xy >= 0 || throw(ArgumentError("cloncurry_sample_bounds: pad_xy must be ≥ 0"))
+    pad_z >= 0 || throw(ArgumentError("cloncurry_sample_bounds: pad_z must be ≥ 0"))
+    keep = _finite_xyz(s)
+    n = count(keep)
+    n == 0 && throw(ArgumentError("cloncurry_sample_bounds: no finite (x, y, z)"))
+    xs, ys, zs = s.east[keep], s.north[keep], s.elev[keep]
+    return (x_min = minimum(xs) - pad_xy, x_max = maximum(xs) + pad_xy,
+            y_min = minimum(ys) - pad_xy, y_max = maximum(ys) + pad_xy,
+            z_min = minimum(zs) - pad_z,  z_max = maximum(zs) + pad_z,
+            n_samples = n)
+end
+
+"""
+    cloncurry_district_spacing(bounds; target=50000, cell_z=100) -> NamedTuple
+
+XY/Z spacing for the district sample AABB. Horizontal cell size follows
+`target` with a fixed reference of 10 Z-layers so XY stays near the
+historical ~2300 m mesh when `target=50000`. Vertical spacing defaults to
+**100 m** (finer than the earlier ~200 m / 10-layer choice; grade vertical
+range is ~300 m). Returns metres, rounded to 100 m (XY) / 50 m (Z).
+"""
+function cloncurry_district_spacing(bounds; target::Integer = 50_000,
+                                    cell_z::Real = 100.0)
+    target > 0 || throw(ArgumentError("cloncurry_district_spacing: target must be positive"))
+    sx = Float64(bounds.x_max - bounds.x_min)
+    sy = Float64(bounds.y_max - bounds.y_min)
+    sz = Float64(bounds.z_max - bounds.z_min)
+    (sx > 0 && sy > 0 && sz > 0) || throw(ArgumentError(
+        "cloncurry_district_spacing: bounds must have positive span"))
+    cell_z = max(50.0, round(Float64(cell_z) / 50) * 50)
+    # Pin XY to the old nz_ref=10 formula so refining Z does not coarsen E/N.
+    nz_xy_ref = 10
+    cell = sqrt(sx * sy * nz_xy_ref / target)
+    cell = max(100.0, round(cell / 100) * 100)
+    nx = max(1, round(Int, sx / cell))
+    ny = max(1, round(Int, sy / cell))
+    nz = max(1, round(Int, sz / cell_z))
+    return (cell = cell, cell_z = cell_z, nx = nx, ny = ny, nz = nz,
+            ncells = nx * ny * nz, target = Int(target))
+end
+
+"""
+    cloncurry_inside_mask(g, s) -> BitVector
+
+Finite-xyz samples whose location falls in `g`.
+"""
+function cloncurry_inside_mask(g::PriorGrid, s::CloncurrySamples)
+    n = length(s)
+    m = falses(n)
+    @inbounds for i in 1:n
+        isfinite(s.east[i]) && isfinite(s.north[i]) && isfinite(s.elev[i]) || continue
+        containing_cell(g, s.east[i], s.north[i], s.elev[i]) == 0 && continue
+        m[i] = true
+    end
+    return m
+end
+
+"""
     cloncurry_grid(bounds; cell=1000, cell_z=100) -> PriorGrid
 
 Cartesian grid on a Cloncurry MGA54 box. `x` easting, `y` northing, `z`
@@ -250,9 +332,11 @@ function load_cloncurry_samples(petrophysics_path::AbstractString,
                   "density_mean_g_cm3", "susceptibility_mean_SI",
                   "conductivity_mean_S_m_100kHz"]
     petro, _ = _read_csv_selected(petrophysics_path, petro_need;
-                                  optional = ["density_mean_kg_m3"])
+                                  optional = ["density_mean_kg_m3", "drillhole"])
     n = length(petro["sample"])
     n > 0 || throw(ArgumentError("load_cloncurry_samples: no petrophysics rows"))
+    drillhole = haskey(petro, "drillhole") ?
+        [strip(s) for s in petro["drillhole"]] : fill("", n)
 
     dens = [_parse_float(s) for s in petro["density_mean_g_cm3"]]
     # Optional kg/m³ column: when present it must be 1000 × g/cm³ (the derived
@@ -297,6 +381,8 @@ function load_cloncurry_samples(petrophysics_path::AbstractString,
     isempty(geochem_cols) && throw(ArgumentError(
         "load_cloncurry_samples: no usable *_Concentration columns (Cu excluded)"))
 
+    _append_derived_geochem!(geochem_names, geochem_cols)
+
     cu_col = "Cu_Concentration"
     cu_col in conc_cols || throw(ArgumentError(
         "load_cloncurry_samples: metals file has no Cu_Concentration"))
@@ -305,6 +391,7 @@ function load_cloncurry_samples(petrophysics_path::AbstractString,
     return CloncurrySamples(
         petro["sample"],
         petro["deposit"],
+        drillhole,
         [_parse_float(s) for s in petro["easting_gda94_mga54_m"]],
         [_parse_float(s) for s in petro["northing_gda94_mga54_m"]],
         [_parse_float(s) for s in petro["sample_elevation_asl_m"]],
@@ -318,6 +405,128 @@ function load_cloncurry_samples(petrophysics_path::AbstractString,
     )
 end
 
+#---------- derived geochemistry (beside raw elements, not instead) ----------
+
+function _geochem_col(names::Vector{String}, cols::Vector{Vector{Float64}}, el::AbstractString)
+    i = findfirst(==(el), names)
+    return i === nothing ? nothing : cols[i]
+end
+
+"""
+Geometric mean of positive finite members among `members`. Needs at least
+`min_members` so a lone Fe assay cannot masquerade as a sulfide index.
+Stored in concentration units so [`geochemistry_channels`](@ref) log10 yields
+the mean of log-concentrations (equal-weight multi-element score).
+"""
+function _sulfide_index(names::Vector{String}, cols::Vector{Vector{Float64}};
+                        members = CLONCURRY_SULFIDE_INDEX_ELEMENTS,
+                        min_members::Int = 2)
+    vecs = Vector{Vector{Float64}}()
+    for el in members
+        v = _geochem_col(names, cols, el)
+        v === nothing && continue
+        push!(vecs, v)
+    end
+    length(vecs) < min_members && return nothing
+    n = length(vecs[1])
+    out = fill(NaN, n)
+    @inbounds for i in 1:n
+        s = 0.0
+        k = 0
+        for v in vecs
+            x = v[i]
+            if isfinite(x) && x > 0
+                s += log10(x)
+                k += 1
+            end
+        end
+        k >= min_members || continue
+        out[i] = exp10(s / k)
+    end
+    any(isfinite, out) || return nothing
+    return out
+end
+
+function _element_ratio(names::Vector{String}, cols::Vector{Vector{Float64}},
+                        num::AbstractString, den::AbstractString)
+    a = _geochem_col(names, cols, num)
+    b = _geochem_col(names, cols, den)
+    (a === nothing || b === nothing) && return nothing
+    n = length(a)
+    out = fill(NaN, n)
+    @inbounds for i in 1:n
+        if isfinite(a[i]) && isfinite(b[i]) && a[i] > 0 && b[i] > 0
+            out[i] = a[i] / b[i]
+        end
+    end
+    any(isfinite, out) || return nothing
+    return out
+end
+
+"""
+Fe / (Fe + Mg + Ca). Magnetite–hematite iron-oxide vs carbonate–mafic host;
+relevant to dense oxide vs sulfide petrophysics in Cloncurry IOCG.
+"""
+function _fe_oxide_ratio(names::Vector{String}, cols::Vector{Vector{Float64}})
+    fe = _geochem_col(names, cols, "Fe")
+    mg = _geochem_col(names, cols, "Mg")
+    ca = _geochem_col(names, cols, "Ca")
+    (fe === nothing || mg === nothing || ca === nothing) && return nothing
+    n = length(fe)
+    out = fill(NaN, n)
+    @inbounds for i in 1:n
+        f, m, c = fe[i], mg[i], ca[i]
+        (isfinite(f) && isfinite(m) && isfinite(c) && f >= 0 && m >= 0 && c >= 0) || continue
+        denom = f + m + c
+        denom > 0 || continue
+        out[i] = f / denom
+    end
+    any(isfinite, out) || return nothing
+    return out
+end
+
+"""
+(K + Mg) / Ca. Potassic (± magnesian) alteration vs calcium host. Na is absent
+from the Cloncurry pXRF suite, so the Ishikawa-style (K+Mg)/(Na+Ca) denominator
+collapses to Ca only.
+"""
+function _alteration_index(names::Vector{String}, cols::Vector{Vector{Float64}})
+    k = _geochem_col(names, cols, "K")
+    mg = _geochem_col(names, cols, "Mg")
+    ca = _geochem_col(names, cols, "Ca")
+    (k === nothing || mg === nothing || ca === nothing) && return nothing
+    n = length(k)
+    out = fill(NaN, n)
+    @inbounds for i in 1:n
+        kk, m, c = k[i], mg[i], ca[i]
+        (isfinite(kk) && isfinite(m) && isfinite(c) && c > 0 && kk >= 0 && m >= 0) || continue
+        out[i] = (kk + m) / c
+    end
+    any(isfinite, out) || return nothing
+    return out
+end
+
+function _append_derived_geochem!(names::Vector{String}, cols::Vector{Vector{Float64}})
+    function push_derived!(name::AbstractString, vals)
+        vals === nothing && return
+        name in names && throw(ArgumentError(
+            "_append_derived_geochem!: duplicate channel $name"))
+        occursin("Cu", name) && throw(ArgumentError(
+            "_append_derived_geochem!: Cu leaked into derived name $name"))
+        push!(names, String(name))
+        push!(cols, vals)
+    end
+
+    push_derived!("sulfide_index", _sulfide_index(names, cols))
+    push_derived!("fe_oxide_ratio", _fe_oxide_ratio(names, cols))
+    push_derived!("alteration_index", _alteration_index(names, cols))
+    for (num, den) in CLONCURRY_GEOCHEM_RATIOS
+        push_derived!(lowercase(num) * "_over_" * lowercase(den),
+                      _element_ratio(names, cols, num, den))
+    end
+    return nothing
+end
+
 function _finite_xyz(s::CloncurrySamples)
     keep = isfinite.(s.east) .& isfinite.(s.north) .& isfinite.(s.elev)
     return keep
@@ -326,8 +535,10 @@ end
 """
     cloncurry_geochemistry(s) -> PointSamples
 
-pXRF concentrations (ppm) with Cu held out. Empty / `<LOD` entries are NaN
-so each channel interpolates independently.
+pXRF concentrations (ppm) with Cu held out, plus literature-derived composites
+(`sulfide_index`, `fe_oxide_ratio`, `alteration_index`, and pathfinder ratios
+from [`CLONCURRY_GEOCHEM_RATIOS`](@ref)). Empty / `<LOD` entries are NaN so
+each channel interpolates independently.
 """
 function cloncurry_geochemistry(s::CloncurrySamples)
     keep = _finite_xyz(s)
@@ -390,7 +601,7 @@ end
     cloncurry_grade_eligible(g, s) -> BitVector
 
 Cu samples that fall inside `g`. Used as the eligible mask for
-[`spatial_holdout`](@ref).
+[`spatial_holdout`](@ref) and [`group_holdout`](@ref).
 """
 function cloncurry_grade_eligible(g::PriorGrid, s::CloncurrySamples)
     n = length(s)
@@ -478,41 +689,308 @@ function spatial_holdout(x::AbstractVector, y::AbstractVector, z::AbstractVector
 end
 
 """
-    load_cloncurry_anchors(g, s; grade_keep=nothing) -> NamedTuple
+    cloncurry_group_keys(drillhole) -> Vector{String}
+
+Hold-out group id per sample. A blank `drillhole` does not join a shared
+"empty" bucket — each such row is `__ungrouped_<row>`.
+"""
+function cloncurry_group_keys(drillhole::AbstractVector{<:AbstractString})
+    n = length(drillhole)
+    keys = Vector{String}(undef, n)
+    @inbounds for i in 1:n
+        g = strip(String(drillhole[i]))
+        keys[i] = isempty(g) ? "__ungrouped_$i" : g
+    end
+    return keys
+end
+
+function _group_count_targets(n_g::Int, fractions::NTuple{3,Real})
+    t = [round(Int, n_g * f) for f in fractions]
+    t[1] = max(1, t[1])
+    if n_g >= 3
+        t[2] = max(1, t[2])
+        t[3] = max(1, t[3])
+    end
+    return _scale_split_targets(n_g, (t[1], t[2], t[3]))
+end
+
+function _scale_split_targets(n::Int, targets)
+    t = [Int(x) for x in targets]
+    length(t) == 3 || throw(ArgumentError(
+        "group_holdout: targets must be (train, val, test)"))
+    s = sum(t)
+    s > 0 || throw(ArgumentError("group_holdout: targets must sum to a positive count"))
+    if s != n
+        t = [round(Int, n * x / s) for x in t]
+        t[1] += n - sum(t)
+    end
+    for i in 1:3
+        t[i] < 0 && (t[i] = 0)
+    end
+    t[1] += n - sum(t)
+    return t
+end
+
+function _greedy_partition(sizes::Vector{Int}, targets::Vector{Int})
+    n = length(sizes)
+    assign = ones(Int, n)
+    counts = zeros(Int, 3)
+    for i in sortperm(sizes; rev = true)
+        remaining = targets .- counts
+        s = argmax(remaining)
+        assign[i] = s
+        counts[s] += sizes[i]
+    end
+    err = abs(counts[1] - targets[1]) + abs(counts[2] - targets[2]) +
+          abs(counts[3] - targets[3])
+    return assign, err, counts
+end
+
+# Assign whole groups to train/val/test. For ≤12 groups, search all 3^n
+# assignments and keep the lexicographically smallest (test names, then val,
+# then train) among minimum L1 distance to `targets`. That is how the
+# 191/45/19 Cu draft is realized as two test holes, not 191 holes.
+function _partition_groups(names::Vector{String}, sizes::Vector{Int},
+                           targets::Vector{Int})
+    n = length(names)
+    n == length(sizes) || throw(ArgumentError(
+        "_partition_groups: names and sizes must match"))
+    length(targets) == 3 || throw(ArgumentError(
+        "_partition_groups: need 3 targets"))
+    n == 0 && throw(ArgumentError("_partition_groups: no groups"))
+    n > 12 && return _greedy_partition(sizes, targets)
+
+    best_err = typemax(Int)
+    best_nonempty = false
+    best_assign = ones(Int, n)
+    best_counts = zeros(Int, 3)
+    best_key = nothing
+    assign = Vector{Int}(undef, n)
+    counts = zeros(Int, 3)
+    nmax = 3^n
+    for code in 0:(nmax - 1)
+        fill!(counts, 0)
+        c = code
+        @inbounds for i in 1:n
+            s = (c % 3) + 1
+            c = div(c, 3)
+            assign[i] = s
+            counts[s] += sizes[i]
+        end
+        err = abs(counts[1] - targets[1]) + abs(counts[2] - targets[2]) +
+              abs(counts[3] - targets[3])
+        nonempty = true
+        @inbounds for s in 1:3
+            if targets[s] > 0 && counts[s] == 0
+                nonempty = false
+                break
+            end
+        end
+        key = (
+            String[names[i] for i in 1:n if assign[i] == 3],
+            String[names[i] for i in 1:n if assign[i] == 2],
+            String[names[i] for i in 1:n if assign[i] == 1],
+        )
+        better = false
+        if nonempty && !best_nonempty
+            better = true
+        elseif nonempty == best_nonempty
+            if err < best_err
+                better = true
+            elseif err == best_err && (best_key === nothing || key < best_key)
+                better = true
+            end
+        end
+        if better
+            best_err = err
+            best_nonempty = nonempty
+            best_assign = copy(assign)
+            best_counts = copy(counts)
+            best_key = key
+        end
+    end
+    return best_assign, best_err, best_counts
+end
+
+"""
+    group_holdout(groups, eligible; unit=:samples, targets=nothing,
+                  fractions=(0.70, 0.15, 0.15), rng)
+
+Split eligible sample indices into `train`, `val`, and `test` by group id.
+
+Every sample that shares a group (a drillhole id) goes to the same split.
+Empty group ids are unique per row via [`cloncurry_group_keys`](@ref).
+
+`unit = :samples` (default) matches **sample counts** to `targets` or
+`fractions` (the Ernest Henry 191/45/19 draft is this mode with
+`targets = (191, 45, 19)`). `unit = :groups` matches **hole counts**
+(~70/15/15 of 121 collars → ~85/18/18). With more than 12 groups,
+`:samples` is a greedy fill; `:groups` shuffles collars then cuts.
+"""
+function group_holdout(groups::AbstractVector{<:AbstractString},
+                       eligible::AbstractVector{Bool};
+                       unit::Symbol = :samples,
+                       targets::Union{Nothing,NTuple{3,Integer}} = nothing,
+                       fractions::NTuple{3,Real} = (0.70, 0.15, 0.15),
+                       rng::AbstractRNG = Random.default_rng())
+    rng isa AbstractRNG || throw(ArgumentError(
+        "group_holdout: rng must be an AbstractRNG"))
+    (unit === :samples || unit === :groups) || throw(ArgumentError(
+        "group_holdout: unit must be :samples or :groups, got $(repr(unit))"))
+    n = length(groups)
+    length(eligible) == n || throw(ArgumentError(
+        "group_holdout: groups and eligible must match length"))
+    cand = findall(eligible)
+    isempty(cand) && throw(ArgumentError("group_holdout: no eligible samples"))
+    gkeys = cloncurry_group_keys(groups)
+    grp_to_idx = Dict{String,Vector{Int}}()
+    for i in cand
+        push!(get!(grp_to_idx, gkeys[i], Int[]), i)
+    end
+    names = sort!(collect(Base.keys(grp_to_idx)))
+    if unit === :groups
+        n_g = length(names)
+        t = targets === nothing ? _group_count_targets(n_g, fractions) :
+            _scale_split_targets(n_g, targets)
+        order = copy(names)
+        shuffle!(rng, order)
+        n_test = t[3]
+        n_val = t[2]
+        test_names = order[1:n_test]
+        val_names = order[(n_test + 1):(n_test + n_val)]
+        train_names = order[(n_test + n_val + 1):end]
+        role = Dict{String,Int}()
+        for h in train_names
+            role[h] = 1
+        end
+        for h in val_names
+            role[h] = 2
+        end
+        for h in test_names
+            role[h] = 3
+        end
+        buckets = [Int[], Int[], Int[]]
+        role_names = [String[], String[], String[]]
+        counts = zeros(Int, 3)
+        for name in names
+            s = role[name]
+            append!(buckets[s], grp_to_idx[name])
+            push!(role_names[s], name)
+            counts[s] += length(grp_to_idx[name])
+        end
+        err = abs(length(role_names[1]) - t[1]) + abs(length(role_names[2]) - t[2]) +
+              abs(length(role_names[3]) - t[3])
+        return (train = sort!(buckets[1]),
+                val = sort!(buckets[2]),
+                test = sort!(buckets[3]),
+                buffer = Int[],
+                n_eligible = length(cand),
+                n_groups = n_g,
+                n_train_groups = length(role_names[1]),
+                n_val_groups = length(role_names[2]),
+                n_test_groups = length(role_names[3]),
+                groups_train = role_names[1],
+                groups_val = role_names[2],
+                groups_test = role_names[3],
+                targets = t,
+                counts = counts,
+                assignment_err = err,
+                unit = :groups)
+    end
+    if length(names) > 12
+        shuffle!(rng, names)
+    end
+    sizes = [length(grp_to_idx[name]) for name in names]
+    t = targets === nothing ?
+        begin
+            tf = [round(Int, length(cand) * f) for f in fractions]
+            tf[1] += length(cand) - sum(tf)
+            tf
+        end : _scale_split_targets(length(cand), targets)
+    assign, err, counts = _partition_groups(names, sizes, t)
+    buckets = [Int[], Int[], Int[]]
+    role_names = [String[], String[], String[]]
+    for (name, s) in zip(names, assign)
+        append!(buckets[s], grp_to_idx[name])
+        push!(role_names[s], name)
+    end
+    return (train = sort!(buckets[1]),
+            val = sort!(buckets[2]),
+            test = sort!(buckets[3]),
+            buffer = Int[],
+            n_eligible = length(cand),
+            n_groups = length(names),
+            n_train_groups = length(role_names[1]),
+            n_val_groups = length(role_names[2]),
+            n_test_groups = length(role_names[3]),
+            groups_train = role_names[1],
+            groups_val = role_names[2],
+            groups_test = role_names[3],
+            targets = t,
+            counts = counts,
+            assignment_err = err,
+            unit = :samples)
+end
+
+function group_mask(keys::AbstractVector{<:AbstractString},
+                    groups::AbstractVector{<:AbstractString})
+    allowed = Set(String.(groups))
+    n = length(keys)
+    mask = falses(n)
+    @inbounds for i in 1:n
+        mask[i] = keys[i] in allowed
+    end
+    return mask
+end
+
+"""
+    load_cloncurry_anchors(g, s; grade_keep=nothing, keep=nothing) -> NamedTuple
 
 Per-property anchors. A sample is an anchor for a property only when that
 property is finite (density / susceptibility / conductivity_100kHz) or when
 Cu is present (`<LOD` lifted to the detection limit). Cells with no mapped
 samples are dropped by [`map_points_to_cells`](@ref).
 
-`grade_keep` hides Cu labels for a spatial hold-out: those rows become NaN
-on the grade head only. Density / susceptibility / conductivity_100kHz are
-unchanged.
+`keep` hides every property on rows that are false (drillhole hold-out).
+`grade_keep` hides Cu only, as in the older spatial hold-out. Both may be
+set; a row is a grade anchor only when both masks allow it.
 """
 function load_cloncurry_anchors(g::PriorGrid, s::CloncurrySamples;
                                 cu_detection_limit::Real = CLONCURRY_CU_DL_PPM,
                                 conductivity_floor::Real = CLONCURRY_COND_FLOOR_S_M,
-                                grade_keep::Union{Nothing,AbstractVector{Bool}} = nothing)
+                                grade_keep::Union{Nothing,AbstractVector{Bool}} = nothing,
+                                keep::Union{Nothing,AbstractVector{Bool}} = nothing)
     n = length(s)
     if grade_keep !== nothing
         length(grade_keep) == n || throw(ArgumentError(
             "load_cloncurry_anchors: grade_keep length $(length(grade_keep)) ≠ $n"))
+    end
+    if keep !== nothing
+        length(keep) == n || throw(ArgumentError(
+            "load_cloncurry_anchors: keep length $(length(keep)) ≠ $n"))
     end
     grade = Vector{Float64}(undef, n)
     dens = Vector{Float64}(undef, n)
     susc = Vector{Float64}(undef, n)
     cond = Vector{Float64}(undef, n)
     @inbounds for i in 1:n
+        allowed = keep === nothing || keep[i]
         gval = cu_log10(s.cu_ppm[i]; detection_limit = cu_detection_limit)
-        if grade_keep !== nothing && !grade_keep[i]
+        if !allowed || (grade_keep !== nothing && !grade_keep[i])
             gval = NaN
         end
         grade[i] = gval
-        d = s.density_g_cm3[i]
-        dens[i] = isfinite(d) && d > 0 ? d : NaN
-        susc[i] = _log10_positive(s.susceptibility_SI[i])
-        cond[i] = _log10_conductivity(s.conductivity_S_m_100kHz[i];
-                                      floor = conductivity_floor)
+        if !allowed
+            dens[i] = NaN
+            susc[i] = NaN
+            cond[i] = NaN
+        else
+            d = s.density_g_cm3[i]
+            dens[i] = isfinite(d) && d > 0 ? d : NaN
+            susc[i] = _log10_positive(s.susceptibility_SI[i])
+            cond[i] = _log10_conductivity(s.conductivity_S_m_100kHz[i];
+                                          floor = conductivity_floor)
+        end
     end
     grade_a = map_points_to_cells(g, s.east, s.north, s.elev, grade)
     dens_a = map_points_to_cells(g, s.east, s.north, s.elev, dens)
@@ -533,4 +1011,314 @@ function load_cloncurry_anchors(g::PriorGrid, s::CloncurrySamples;
     ))
     return (grade = grade_a, density = dens_a, susceptibility = susc_a,
             conductivity_100kHz = cond_a, stats = stats)
+end
+
+#---------- structural geology (GeoJSON → MGA54 channels) ----------
+# geology/structures.geojson and geology/surface_geology.geojson ship as
+# WGS84 lon/lat (download outSR=4326). Distances and PIP run in EPSG:28354
+# metres so they match petrophysics easting/northing. Fold / Layering /
+# MiscLineFeature are not separate channels — they only feed the all-lines
+# distance. Surface map one-hots sit beside drillhole lith_* channels.
+
+function cloncurry_geology_dir(dataset_root::AbstractString)
+    d = joinpath(dataset_root, "geology")
+    isdir(d) || throw(ArgumentError(
+        "cloncurry_geology_dir: no geology/ under $dataset_root"))
+    return d
+end
+
+function cloncurry_structures_path(dataset_root::AbstractString)
+    p = joinpath(cloncurry_geology_dir(dataset_root), "structures.geojson")
+    isfile(p) || throw(ArgumentError(
+        "cloncurry_structures_path: no such file: $p"))
+    return p
+end
+
+function cloncurry_surface_geology_path(dataset_root::AbstractString)
+    p = joinpath(cloncurry_geology_dir(dataset_root), "surface_geology.geojson")
+    isfile(p) || throw(ArgumentError(
+        "cloncurry_surface_geology_path: no such file: $p"))
+    return p
+end
+
+function _cloncurry_mga54_transform(f)
+    src = ArchGDAL.importEPSG(4326)
+    ArchGDAL.maybesetaxisorder!(src, :trad)
+    dst = ArchGDAL.importEPSG(28354)
+    return ArchGDAL.createcoordtrans(src, dst) do ct
+        f(ct)
+    end
+end
+
+function _geom_xy_mga54(geom, ct)
+    g = ArchGDAL.clone(geom)
+    ArchGDAL.transform!(g, ct)
+    n = ArchGDAL.ngeom(g)
+    xs = Vector{Float64}(undef, n)
+    ys = Vector{Float64}(undef, n)
+    @inbounds for i in 0:(n - 1)
+        x, y, _ = ArchGDAL.getpoint(g, i)
+        xs[i + 1] = x
+        ys[i + 1] = y
+    end
+    return xs, ys
+end
+
+"""
+    load_cloncurry_structures(path) -> Vector{NamedTuple}
+
+LineString structural features in GDA94 / MGA zone 54 metres. Each entry is
+`(type, x, y)` with `type` from the GeoJSON `type` property (Contact, Fault,
+Fold, MiscLineFeature, Layering).
+"""
+function load_cloncurry_structures(path::AbstractString)
+    isfile(path) || throw(ArgumentError(
+        "load_cloncurry_structures: no such file: $path"))
+    lines = NamedTuple{(:type, :x, :y),Tuple{String,Vector{Float64},Vector{Float64}}}[]
+    ArchGDAL.read(path) do ds
+        layer = ArchGDAL.getlayer(ds, 0)
+        _cloncurry_mga54_transform() do ct
+            for feat in layer
+                raw = ArchGDAL.getfield(feat, "type")
+                typ = raw === nothing ? "" : strip(String(raw))
+                isempty(typ) && continue
+                geom = ArchGDAL.getgeom(feat)
+                geom === nothing && continue
+                xs, ys = _geom_xy_mga54(geom, ct)
+                length(xs) < 2 && continue
+                push!(lines, (type = typ, x = xs, y = ys))
+            end
+        end
+    end
+    isempty(lines) && throw(ArgumentError(
+        "load_cloncurry_structures: no LineString features in $path"))
+    return lines
+end
+
+"""
+    load_cloncurry_surface_geology(path) -> Vector{NamedTuple}
+
+Polygon surface-geology units in MGA54 metres. Each entry is
+`(dom_rock, rock_type, rings)` where `rings` is a vector of `(x, y)` rings:
+index 1 is the exterior, the rest are holes.
+"""
+function load_cloncurry_surface_geology(path::AbstractString)
+    isfile(path) || throw(ArgumentError(
+        "load_cloncurry_surface_geology: no such file: $path"))
+    polys = NamedTuple{(:dom_rock, :rock_type, :rings),
+                       Tuple{String,String,Vector{Tuple{Vector{Float64},Vector{Float64}}}}}[]
+    ArchGDAL.read(path) do ds
+        layer = ArchGDAL.getlayer(ds, 0)
+        _cloncurry_mga54_transform() do ct
+            for feat in layer
+                dom = ArchGDAL.getfield(feat, "dom_rock")
+                rock = ArchGDAL.getfield(feat, "rock_type")
+                dom_s = dom === nothing ? "" : strip(String(dom))
+                rock_s = rock === nothing ? "" : strip(String(rock))
+                (isempty(dom_s) && isempty(rock_s)) && continue
+                geom = ArchGDAL.getgeom(feat)
+                geom === nothing && continue
+                nring = ArchGDAL.ngeom(geom)
+                nring == 0 && continue
+                rings = Tuple{Vector{Float64},Vector{Float64}}[]
+                for r in 0:(nring - 1)
+                    ring = ArchGDAL.getgeom(geom, r)
+                    xs, ys = _geom_xy_mga54(ring, ct)
+                    length(xs) < 3 && continue
+                    push!(rings, (xs, ys))
+                end
+                isempty(rings) && continue
+                push!(polys, (dom_rock = dom_s, rock_type = rock_s, rings = rings))
+            end
+        end
+    end
+    isempty(polys) && throw(ArgumentError(
+        "load_cloncurry_surface_geology: no Polygon features in $path"))
+    return polys
+end
+
+function _point_segment_dist2(px::Float64, py::Float64,
+                              ax::Float64, ay::Float64,
+                              bx::Float64, by::Float64)
+    dx = bx - ax
+    dy = by - ay
+    len2 = dx * dx + dy * dy
+    if len2 == 0
+        ex = px - ax
+        ey = py - ay
+        return ex * ex + ey * ey
+    end
+    t = ((px - ax) * dx + (py - ay) * dy) / len2
+    t = clamp(t, 0.0, 1.0)
+    qx = ax + t * dx
+    qy = ay + t * dy
+    ex = px - qx
+    ey = py - qy
+    return ex * ex + ey * ey
+end
+
+function _min_line_dist2(px::Float64, py::Float64,
+                         lines::AbstractVector{<:NamedTuple},
+                         mask::Union{Nothing,Function} = nothing)
+    best = Inf
+    @inbounds for line in lines
+        mask !== nothing && !mask(line.type) && continue
+        xs = line.x
+        ys = line.y
+        for i in 1:(length(xs) - 1)
+            d2 = _point_segment_dist2(px, py, xs[i], ys[i], xs[i + 1], ys[i + 1])
+            d2 < best && (best = d2)
+        end
+    end
+    return best
+end
+
+# Even-odd ray cast. Rings may be closed (first == last); that is fine.
+function _point_in_ring(px::Float64, py::Float64,
+                        xs::AbstractVector{<:Real}, ys::AbstractVector{<:Real})
+    n = length(xs)
+    n == length(ys) || throw(ArgumentError("_point_in_ring: x/y length mismatch"))
+    n < 3 && return false
+    inside = false
+    j = n
+    @inbounds for i in 1:n
+        yi = Float64(ys[i]); yj = Float64(ys[j])
+        xi = Float64(xs[i]); xj = Float64(xs[j])
+        if (yi > py) != (yj > py)
+            xcross = (xj - xi) * (py - yi) / (yj - yi) + xi
+            if px < xcross
+                inside = !inside
+            end
+        end
+        j = i
+    end
+    return inside
+end
+
+function _point_in_polygon(px::Float64, py::Float64,
+                           rings::AbstractVector{<:Tuple})
+    isempty(rings) && return false
+    xs0, ys0 = rings[1]
+    _point_in_ring(px, py, xs0, ys0) || return false
+    @inbounds for r in 2:length(rings)
+        xs, ys = rings[r]
+        _point_in_ring(px, py, xs, ys) && return false
+    end
+    return true
+end
+
+function _distance_map(g::PriorGrid, lines, mask)
+    nx, ny = size(g, 1), size(g, 2)
+    near = Array{Float64}(undef, nx, ny)
+    h = g.h_median
+    @inbounds for j in 1:ny, i in 1:nx
+        d2 = _min_line_dist2(g.cx[i], g.cy[j], lines, mask)
+        near[i, j] = isfinite(d2) ? log1p(sqrt(d2) / h) : 0.0
+    end
+    return near
+end
+
+"""
+    structure_distance_channels(g, source) -> (chans, names)
+
+Plan-view distance channels (extruded through depth), matching
+[`coverage_channels`](@ref): `log1p(d / h_median)` in metres under GDA94/MGA54.
+
+- `struct_fault_distance` — nearest Fault line (IOCG structural control)
+- `struct_line_distance` — nearest structural line of any type (Contact, Fault,
+  Fold, MiscLineFeature, Layering)
+
+`source` is a dataset root (uses `geology/structures.geojson`), a GeoJSON path,
+or a pre-loaded vector from [`load_cloncurry_structures`](@ref).
+"""
+function structure_distance_channels(g::PriorGrid, source)
+    lines = if source isa AbstractString
+        path = isdir(source) ? cloncurry_structures_path(source) : String(source)
+        load_cloncurry_structures(path)
+    else
+        source
+    end
+    isempty(lines) && throw(ArgumentError(
+        "structure_distance_channels: no structural lines"))
+    any(l -> l.type == "Fault", lines) || throw(ArgumentError(
+        "structure_distance_channels: no Fault lines in the collection"))
+    nz = size(g, 3)
+    fault = _distance_map(g, lines, t -> t == "Fault")
+    any_line = _distance_map(g, lines, nothing)
+    return Array{Float64,3}[extrude(fault, nz), extrude(any_line, nz)],
+           String["struct_fault_distance", "struct_line_distance"]
+end
+
+"""
+    surface_geology_channels(g, source) -> (chans, names)
+
+Point-in-polygon one-hot channels from the 1:500k surface geology map.
+`surf_dom_*` encodes `dom_rock` and `surf_rock_*` encodes `rock_type`. Cells
+outside every polygon get the matching `*_OTHER` bit. These are *added*
+alongside drillhole [`lithology_channels`](@ref), not a replacement.
+
+`source` is a dataset root, a GeoJSON path, or a pre-loaded vector from
+[`load_cloncurry_surface_geology`](@ref).
+"""
+function surface_geology_channels(g::PriorGrid, source)
+    polys = if source isa AbstractString
+        path = isdir(source) ? cloncurry_surface_geology_path(source) : String(source)
+        load_cloncurry_surface_geology(path)
+    else
+        source
+    end
+    isempty(polys) && throw(ArgumentError(
+        "surface_geology_channels: no surface-geology polygons"))
+
+    dom_set = Set{String}()
+    rock_set = Set{String}()
+    for p in polys
+        isempty(p.dom_rock) || push!(dom_set, _lith_token(p.dom_rock))
+        isempty(p.rock_type) || push!(rock_set, _lith_token(p.rock_type))
+    end
+    dom_classes = sort!(collect(dom_set))
+    rock_classes = sort!(collect(rock_set))
+    push!(dom_classes, "OTHER")
+    push!(rock_classes, "OTHER")
+    dom_index = Dict(c => i for (i, c) in enumerate(dom_classes))
+    rock_index = Dict(c => i for (i, c) in enumerate(rock_classes))
+
+    nx, ny, nz = size(g)
+    nd = length(dom_classes)
+    nr = length(rock_classes)
+    dom_maps = [zeros(nx, ny) for _ in 1:nd]
+    rock_maps = [zeros(nx, ny) for _ in 1:nr]
+    @inbounds for j in 1:ny, i in 1:nx
+        px = g.cx[i]; py = g.cy[j]
+        hit = 0
+        for (k, p) in enumerate(polys)
+            _point_in_polygon(px, py, p.rings) || continue
+            hit = k
+            break
+        end
+        if hit == 0
+            dom_maps[dom_index["OTHER"]][i, j] = 1.0
+            rock_maps[rock_index["OTHER"]][i, j] = 1.0
+        else
+            p = polys[hit]
+            dtok = isempty(p.dom_rock) ? "OTHER" : _lith_token(p.dom_rock)
+            rtok = isempty(p.rock_type) ? "OTHER" : _lith_token(p.rock_type)
+            haskey(dom_index, dtok) || (dtok = "OTHER")
+            haskey(rock_index, rtok) || (rtok = "OTHER")
+            dom_maps[dom_index[dtok]][i, j] = 1.0
+            rock_maps[rock_index[rtok]][i, j] = 1.0
+        end
+    end
+
+    chans = Array{Float64,3}[]
+    names = String[]
+    for (c, m) in zip(dom_classes, dom_maps)
+        push!(chans, extrude(m, nz))
+        push!(names, "surf_dom_" * c)
+    end
+    for (c, m) in zip(rock_classes, rock_maps)
+        push!(chans, extrude(m, nz))
+        push!(names, "surf_rock_" * c)
+    end
+    return chans, names
 end

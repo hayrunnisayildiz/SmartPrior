@@ -246,7 +246,9 @@ function train_prior(net::PriorNet,
                      targets::PriorTargets;
                      config::TrainConfig = TrainConfig(),
                      offset::Union{Nothing,AbstractVector} = nothing,
-                     rng::Union{Nothing,AbstractRNG} = nothing)
+                     rng::Union{Nothing,AbstractRNG} = nothing,
+                     start_params = nothing,
+                     epoch_offset::Integer = 0)
     config.epochs > 0 || throw(ArgumentError("train_prior: epochs must be positive"))
     config.log_every > 0 || throw(ArgumentError("train_prior: log_every must be positive"))
     size(X, 2) == ncells(grid) || throw(DimensionMismatch(
@@ -254,6 +256,10 @@ function train_prior(net::PriorNet,
 
     generator = rng === nothing ? Xoshiro(config.seed) : rng
     params, st = init_params(generator, net; slope_bounds = config.slope_bounds)
+    if start_params !== nothing
+        params = start_params
+    end
+    epoch_offset >= 0 || throw(ArgumentError("train_prior: epoch_offset must be ≥ 0"))
 
     if targets.gravity !== nothing && !all(isfinite, config.slope_bounds)
         @warn """train_prior: fitting gravity with an unbounded coupling slope. \
@@ -292,9 +298,28 @@ function train_prior(net::PriorNet,
     best_params = params
     stale = 0
 
+    # On resume, seed the running best from the loaded weights so an Adam
+    # warm-up spike cannot replace a better pre-resume checkpoint.
+    if start_params !== nothing && epoch_offset > 0
+        (mu0, sigma0), _ = predict(net, X, params.net, st; offset = offset)
+        report0 = loss_report(mu0, sigma0, coupling_of(params), grid, targets,
+                              config.weights)
+        if isfinite(report0.total)
+            best_loss = report0.total
+            best_epoch = Int(epoch_offset)
+            best_params = params
+            if config.verbose
+                @printf("resume seed  epoch %d  total %.5e  (protects pre-resume best)\n",
+                        best_epoch, best_loss)
+                flush(stdout)
+            end
+        end
+    end
+
     use_sigma_drive = targets.sigma_drive !== nothing
 
     for epoch in 1:config.epochs
+        logged_epoch = epoch + Int(epoch_offset)
         # ---- data-driven sigma targets (outside AD) ----
         effective_targets = if use_sigma_drive
             (mu_now, _), _ = predict(net, X, params.net, st; offset = offset)
@@ -309,7 +334,7 @@ function train_prior(net::PriorNet,
 
         lossfn = p -> _train_loss(net, X, st, grid, effective_targets, config.weights, offset, p)
         val, grads = Zygote.withgradient(lossfn, params)
-        isfinite(val) || error("train_prior: loss became $(val) at epoch $(epoch)")
+        isfinite(val) || error("train_prior: loss became $(val) at epoch $(logged_epoch)")
         opt_state, params = Optimisers.update!(opt_state, params, grads[1])
 
         if epoch % config.log_every == 0 || epoch == 1 || epoch == config.epochs
@@ -318,7 +343,7 @@ function train_prior(net::PriorNet,
                                  effective_targets, config.weights)
             sat = _saturation(net, mu, offset)
             slope = coupling_of(params).slope
-            entry = merge((epoch = epoch, slope = slope, saturation = sat), report)
+            entry = merge((epoch = logged_epoch, slope = slope, saturation = sat), report)
 
             # record sigma target statistics when data-driven
             if use_sigma_drive && effective_targets.sigma_target_vec !== nothing
@@ -331,7 +356,7 @@ function train_prior(net::PriorNet,
 
             if config.verbose
                 @printf("epoch %6d  total %.5e  slope %+.3f  sat %.3f",
-                        epoch, report.total, slope, sat)
+                        logged_epoch, report.total, slope, sat)
                 for (label, term_field, w_field) in (
                         ("grade", :grade, :grade),
                         ("dens", :density, :density),
@@ -352,14 +377,14 @@ function train_prior(net::PriorNet,
 
             if report.total < best_loss - config.min_delta
                 best_loss = report.total
-                best_epoch = epoch
+                best_epoch = logged_epoch
                 best_params = params
                 stale = 0
             else
                 stale += 1
                 if config.patience > 0 && stale >= config.patience
                     config.verbose && @printf("early stop at epoch %d (best %.5e at %d)\n",
-                                              epoch, best_loss, best_epoch)
+                                              logged_epoch, best_loss, best_epoch)
                     break
                 end
             end
