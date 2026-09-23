@@ -88,6 +88,7 @@ export cloncurry_group_keys, group_mask
 export cloncurry_geology_dir, cloncurry_structures_path, cloncurry_surface_geology_path
 export load_cloncurry_structures, load_cloncurry_surface_geology
 export structure_distance_channels, surface_geology_channels
+export cloncurry_sample_table
 export CLONCURRY_PROPERTY_NAMES, CLONCURRY_GEOCHEM_ELEMENTS
 export CLONCURRY_SULFIDE_INDEX_ELEMENTS, CLONCURRY_GEOCHEM_RATIOS
 export CLONCURRY_CONDUCTIVITY_STATUS, CLONCURRY_WORK_BOUNDS

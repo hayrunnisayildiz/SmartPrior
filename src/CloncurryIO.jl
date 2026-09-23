@@ -1341,3 +1341,220 @@ function surface_geology_channels(g::PriorGrid, source)
     end
     return chans, names
 end
+
+#---------- SampleTable adapter ----------
+# The training path above still lifts Cu "<LOD" to 1 ppm and, at log10 time,
+# conductivity zeros to 0.01 S/m. This adapter does not. A "<LOD" token is an
+# upper bound at the detection limit (the smallest positive measurement in
+# the column when the file does not state one). A conductivity of exactly 0
+# is an upper bound at the instrument floor from the site file.
+
+const _SAMPLE_PROPERTY_ORDER = ("cu", "density", "susceptibility", "conductivity", "lithology")
+
+function _ordered_property_names(props::AbstractDict)
+    names = String[]
+    for n in _SAMPLE_PROPERTY_ORDER
+        haskey(props, n) && push!(names, n)
+    end
+    extras = sort!(String[string(k) for k in keys(props) if !(string(k) in names)])
+    append!(names, extras)
+    return names
+end
+
+function _cfg_data_path(default::Function, root::AbstractString, cfg, key::AbstractString)
+    if cfg isa AbstractDict && haskey(cfg, key)
+        p = strip(String(cfg[key]))
+        if !isempty(p)
+            return isabspath(p) ? p : normpath(joinpath(root, p))
+        end
+    end
+    return String(default())
+end
+
+function _filled_label(raw, i::Int, blank_prefix::AbstractString)
+    t = strip(String(raw))
+    if isempty(t) || lowercase(t) == "missing"
+        return String(blank_prefix) * string(i)
+    end
+    return t
+end
+
+function _spec_from_property(name::AbstractString, p::AbstractDict)
+    kind = Symbol(String(get(p, "kind", "continuous")))
+    transform = Symbol(String(get(p, "transform", "identity")))
+    unit = String(get(p, "unit", ""))
+    return PropertySpec(Symbol(name), kind, transform, unit)
+end
+
+function _continuous_column(raw::Vector{String}, prop::Symbol, p::AbstractDict)
+    policy = haskey(p, "lod_policy") ? strip(String(p["lod_policy"])) : ""
+    n = length(raw)
+    values = fill(NaN, n)
+    cens = falses(n)
+    positive = Float64[]
+    for i in 1:n
+        t = strip(raw[i])
+        if isempty(t)
+            continue
+        elseif _is_lod(t)
+            if isempty(policy)
+                throw(ArgumentError(
+                    "cloncurry_sample_table: $(prop) row $i is a detection-limit " *
+                    "token but the property has no lod_policy"))
+            end
+            cens[i] = true
+        else
+            v = _parse_float(t)
+            if !isfinite(v)
+                continue
+            elseif policy == "instrument_floor" && v == 0
+                cens[i] = true
+            else
+                values[i] = v
+                v > 0 && push!(positive, v)
+            end
+        end
+    end
+    if isempty(policy)
+        return values, cens
+    elseif policy == "min_positive"
+        if any(cens)
+            isempty(positive) && throw(ArgumentError(
+                "cloncurry_sample_table: $(prop) has censored rows but no positive " *
+                "measurement to use as the detection limit"))
+            lod = minimum(positive)
+            @info "detection limit is not in the file; using the smallest positive measured value" property=prop lod n_positive=length(positive) n_censored=count(cens) column=String(get(p, "column", ""))
+            values[cens] .= lod
+        end
+    elseif policy == "fixed"
+        haskey(p, "lod") || throw(ArgumentError(
+            "cloncurry_sample_table: lod_policy \"fixed\" needs a lod value for $(prop)"))
+        lod = Float64(p["lod"])
+        lod > 0 || throw(ArgumentError(
+            "cloncurry_sample_table: lod for $(prop) must be positive, got $lod"))
+        @info "detection limit taken from the site file" property=prop lod n_censored=count(cens)
+        values[cens] .= lod
+    elseif policy == "instrument_floor"
+        floor = haskey(p, "floor") ? Float64(p["floor"]) : CLONCURRY_COND_FLOOR_S_M
+        floor > 0 || throw(ArgumentError(
+            "cloncurry_sample_table: instrument floor for $(prop) must be positive, got $floor"))
+        @info "exact zeros stored at the instrument floor and marked censored" property=prop floor n_censored=count(cens) column=String(get(p, "column", ""))
+        values[cens] .= floor
+    else
+        throw(ArgumentError(
+            "cloncurry_sample_table: unknown lod_policy $(repr(policy)) for $(prop). " *
+            "Use min_positive, fixed, or instrument_floor"))
+    end
+    return values, cens
+end
+
+"""
+    cloncurry_sample_table(root, cfg) -> SampleTable
+
+Cloncurry petrophysics + pXRF rows as a [`SampleTable`](@ref).
+
+`cfg` is a parsed site file. Continuous numbers stay in the file's unit
+(`PropertySpec.transform` is not applied). Cu `"<LOD"` is stored as the
+detection limit with `censored[:cu] = true`: the limit is `lod` when
+`lod_policy = "fixed"`, otherwise the smallest positive measured value in
+the whole column (logged; the historical 1 ppm substitution is not used).
+`conductivity_mean_S_m_100kHz == 0` is stored as the instrument floor
+(`floor` in the property, default [`CLONCURRY_COND_FLOOR_S_M`](@ref)) with
+`censored[:conductivity] = true`.
+
+Blank drillhole ids become `__ungrouped_<row>` and blank deposits
+`__ungrouped_deposit_<row>`, using the source-file row number, so `hole`
+and `group` are filled before an optional `deposit` filter. That filter
+keeps rows whose deposit label matches; the detection limit is chosen on
+the unfiltered column.
+"""
+function cloncurry_sample_table(root::AbstractString, cfg::AbstractDict)
+    petro_path = _cfg_data_path(root, cfg, "petrophysics") do
+        cloncurry_petrophysics_path(root)
+    end
+    metals_path = _cfg_data_path(root, cfg, "metals") do
+        cloncurry_metals_path(root)
+    end
+    # Alignment, unit, and geochem checks stay with the existing loader.
+    # Its Cu substitution is ignored; the columns below are reread as text.
+    samples = load_cloncurry_samples(petro_path, metals_path)
+    n = length(samples)
+    haskey(cfg, "properties") || throw(ArgumentError(
+        "cloncurry_sample_table: site file has no [properties]"))
+    props = cfg["properties"]
+    props isa AbstractDict || throw(ArgumentError(
+        "cloncurry_sample_table: [properties] must be a table"))
+    names = _ordered_property_names(props)
+    isempty(names) && throw(ArgumentError(
+        "cloncurry_sample_table: no properties in the site file"))
+
+    petro_cols = String[]
+    metal_cols = String[]
+    column_of = Dict{String,String}()
+    parsed = Dict{String,Any}()
+    for name in names
+        p = props[name]
+        p isa AbstractDict || throw(ArgumentError(
+            "cloncurry_sample_table: properties.$name must be a table"))
+        haskey(p, "column") || throw(ArgumentError(
+            "cloncurry_sample_table: properties.$name has no column"))
+        parsed[name] = p
+        col = String(p["column"])
+        column_of[name] = col
+        if endswith(col, "_Concentration")
+            push!(metal_cols, col)
+        else
+            push!(petro_cols, col)
+        end
+    end
+    unique!(petro_cols)
+    unique!(metal_cols)
+
+    petro_raw, _ = _read_csv_selected(petro_path, unique!(vcat(["sample"], petro_cols)))
+    petro_raw["sample"] == samples.sample || throw(ArgumentError(
+        "cloncurry_sample_table: petrophysics reread is not row-aligned with the loader"))
+    metal_raw = Dict{String,Vector{String}}()
+    if !isempty(metal_cols)
+        metal_raw, _ = _read_csv_selected(metals_path, unique!(vcat(["Sample"], metal_cols)))
+        metal_raw["Sample"] == samples.sample || throw(ArgumentError(
+            "cloncurry_sample_table: metals reread is not row-aligned with the loader"))
+    end
+
+    specs = PropertySpec[]
+    values = Dict{Symbol,Vector{Float64}}()
+    censored = Dict{Symbol,BitVector}()
+    classes = Dict{Symbol,Vector{String}}()
+    for name in names
+        p = parsed[name]
+        spec = _spec_from_property(name, p)
+        push!(specs, spec)
+        col = column_of[name]
+        raw = endswith(col, "_Concentration") ? metal_raw[col] : petro_raw[col]
+        length(raw) == n || throw(ArgumentError(
+            "cloncurry_sample_table: column $(col) has $(length(raw)) rows, expected $n"))
+        if spec.kind === :categorical
+            haskey(p, "lod_policy") && throw(ArgumentError(
+                "cloncurry_sample_table: categorical $(name) cannot have an lod_policy"))
+            classes[spec.name] = [strip(s) for s in raw]
+        elseif spec.kind === :continuous
+            vals, bits = _continuous_column(raw, spec.name, p)
+            values[spec.name] = vals
+            censored[spec.name] = bits
+        else
+            throw(ArgumentError(
+                "cloncurry_sample_table: unsupported kind $(repr(spec.kind))"))
+        end
+    end
+
+    holes = [_filled_label(samples.drillhole[i], i, "__ungrouped_") for i in 1:n]
+    groups = [_filled_label(samples.deposit[i], i, "__ungrouped_deposit_") for i in 1:n]
+    table = SampleTable(samples.east, samples.north, samples.elev,
+                         holes, groups, values, censored, classes, specs)
+    if haskey(cfg, "deposit") && !isempty(strip(String(cfg["deposit"])))
+        dep = strip(String(cfg["deposit"]))
+        table = subset(table, table.group .== dep)
+        nsamples(table) > 0 || throw(ArgumentError(
+            "cloncurry_sample_table: no rows with deposit $(repr(dep))"))
+    end
+    return table
+end
