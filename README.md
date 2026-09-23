@@ -1,264 +1,133 @@
-# SmartPrior — Cloncurry geochemistry + petrophysics prior
+# SmartPrior
 
-**One line:** a Julia/Lux.jl neural field that predicts ore grade, density,
-magnetic susceptibility, and rock-specimen conductivity on every cell of a 3D
-block model from sparse pXRF geochemistry, drillhole lithology, sample
-coverage, and structural geology — **no gravity, no magnetics, no MT
-as input**.
+A Julia / Lux.jl neural-field method that predicts rock properties — Cu grade, density, magnetic susceptibility — at any 3D location from sparse drillhole samples, together with a per-location uncertainty. A block model is obtained by evaluating the field at block locations.
 
-Active case study: **Cloncurry district** (Queensland; METAL package
-`Cloncurry_integrated_2026-09-17`). Not a claim that the same weights transfer
-to other deposits.
-
-The MT-era package (SmartPriorMT) is archived as git tag `v0-mt-archive`.
-
----
+The method is site-agnostic: a site enters only through a data adapter and a TOML config. The current case study is the Cloncurry district (Queensland).
 
 ## Status
 
-| Question | Answer |
+| | |
 |---|---|
-| Active dataset | Cloncurry district sample AABB (~118 × 219 km), 120 named holes |
-| Fourth head | **`conductivity_100kHz`** — KT-20, 100 kHz, specimen-scale. **Not** MT bulk conductivity |
-| Leak-free result | **Not yet.** Published district numbers used test-hole pXRF as input (see [Results](#results--district-drillhole-hold-out)) |
-| Active mesh | **2300 m XY × 100 m Z** (default; refined from 200 m Z after variogram) |
-| Density vs naive | Old leaky run still loses; needs a leak-free rerun |
-| Structural geology | Live: +16 channels → **69** total; scored under `…_w256_d4_geology/` |
+| Real-data feasibility (Cloncurry, 4 deposits) | Done. No method — kriging, IDW or the neural field — beats a constant mean on held-out drillholes. Holes are 100–370 m apart, 4–11 per deposit. See [`docs/2026-09_cloncurry_feasibility_report.md`](docs/2026-09_cloncurry_feasibility_report.md). |
+| Semi-synthetic benchmark | In progress. Known 3D fields sampled at Cloncurry's real sample locations, to measure when prediction becomes possible. |
+| Multi-output heads, censored likelihood, block averaging | Planned (Phase 2). |
 
----
-
-## Why district (not Ernest Henry alone)
-
-Ernest Henry has only **11** named holes. A 7/2/2 hole split (same old input
-construction) showed grade with a weak signal and density / susceptibility /
-`conductivity_100kHz` all losing to naive
-(`tmp_cloncurry_prior_eh_group_holdout/cloncurry_holdout_report.txt`). Shrinking
-the net (64/2) did not rescue those heads — capacity was not the bottleneck.
-
-The active grid is therefore the **district sample AABB** covering every
-finite-xyz METAL row (~1,586 samples / **120** holes), with whole-collar
-assignment ~70/15/15 → **84 / 18 / 18** holes (`split_seed=2026`).
-
----
-
-## Data (not in this repository)
+## Architecture
 
 ```
-CLONCURRY_ROOT  (default ~/Desktop/datasets4HY/Cloncurry_integrated_2026-09-17)
-├── derived/
-│   ├── petrophysics_samples.csv
-│   └── metal_all_fields.csv.gz
-└── geology/
-    ├── structures.geojson      # LineStrings (fault / contact / …)
-    └── surface_geology.geojson # Polygons (dom_rock, rock_type)
+ INPUTS                         NETWORK                               OUTPUTS
+ ──────                         ───────                               ───────
+ query point (x, y, z)  ──►  Fourier encoding of xyz  ──┐
+                                                         ├──►  MLP  ──►  μ(x)  predicted value
+ covariates at (x, y, z) ─────────────────────────────── ┘              σ(x)  uncertainty
+ (depth, structure distance,                                  × 5-member ensemble
+  surface geology)
 ```
 
-`mt/`, `gravity/`, and `magnetics/` sit in the same package and are **not
-opened**. Magnetics as an input channel is deliberately withheld pending a
-separate go-ahead. Tiny fixtures: `test/fixtures/cloncurry_*`.
+### Inputs
 
----
+The network only sees quantities that are **known at every location**, so the same function can be evaluated at a drillhole sample or at an arbitrary block.
 
-## Inputs (feature channels)
+| Input | What it is |
+|---|---|
+| Coordinates | x, y, z normalised to the site box |
+| Depth | log depth below the surface |
+| Structure distance | distance to mapped faults and contacts |
+| Surface geology | one-hot surface rock class at (x, y) |
 
-Built by `examples/holdout_cloncurry_prior.jl` /
-`examples/train_cloncurry_prior.jl` via `src/CloncurryIO.jl` + `src/Features.jl`.
-`Cu_Concentration` is the grade **target**, never a feature.
+Deliberately **not** inputs:
 
-### Live district stack without geology — **53 channels**
+- **pXRF geochemistry and drillhole lithology** exist only at samples. At a held-out hole they would leak that hole's own measurements, and at an undrilled block they do not exist. They are candidates for *outputs*.
+- **Sample distance** is used only as a confidence mask for display.
 
-| Group | Count | Names / notes |
-|---|---:|---|
-| Coordinates | 3 | `x_norm`, `y_norm`, `z_norm` (→ Fourier `n_bands=4`) |
-| Depth | 2 | `log_depth`, `depth_over_skin` (geometric scale, not an MT input) |
-| Geochemistry | **32** | `geochem_{Mg…U}` except Cu. **Co** is dropped when no finite positive ppm remain |
-| Drillhole lithology | 15 | `lith_AMP` … `lith_PSM`, `lith_OTHER` (one-hot; rare → OTHER) |
-| Coverage | 1 | `sample_distance` |
+Every covariate is a pure, point-wise function. Its normalisation statistics are fixed when the covariate is built, so `evaluate(c, xyz)` does not depend on which other points are queried.
 
-### Structural geology (+16 → **69 channels**)
+### Network
 
-| Group | Count | Names |
-|---|---:|---|
-| Structure distance | 2 | `struct_fault_distance`, `struct_line_distance` |
-| Surface `dom_rock` | 11 | `surf_dom_ARENITE_RUDITE` … `surf_dom_QUARTZITE`, `surf_dom_OTHER` |
-| Surface `rock_type` | 3 | `surf_rock_INTRUSIVE_UNIT`, `surf_rock_STRATIFIED_UNIT_INCLUDING_VOLCANIC_AND_METAMORPHIC`, `surf_rock_OTHER` |
+| Stage | Setting |
+|---|---|
+| Encoding | xyz plus sin/cos(π·s·x) for 16 log-spaced scales s ∈ [1, 16]; other covariates appended unencoded |
+| Body | MLP, 3 hidden layers × 64 units, GELU |
+| Head | linear → (μ, σ), σ = softplus + 10⁻³ |
+| Ensemble | 5 members with different seeds; predictive variance = mean σ² + variance of member means |
 
----
+Currently one network is trained per property. A shared network with one head per property is planned.
 
-## Outputs
+### Training
 
-Eight heads (`Dense(width => 8)`): four properties × (`μ`, `σ`).
-Heteroscedastic NLL with per-property σ floor = `1 ×` group std of train
-anchors.
+- **Loss:** heteroscedastic Gaussian negative log-likelihood on sample points. There is no grid during training.
+- **Optimiser:** AdamW (lr 10⁻³, weight decay 10⁻⁴), full batch.
+- **Early stopping:** on held-out *training holes* (20 %); a test hole never influences training, standardisation or stopping.
+- **Target scaling:** standardised with the training fold's mean and SD.
+- **Censored values** (below detection limit) are carried in the data with a flag. They are currently set to the limit; a censored likelihood is planned.
 
-| Property | NLL units | Source column |
+### Outputs
+
+| Property | Unit | Per location |
 |---|---|---|
-| `grade` | log10 Cu ppm | `Cu_Concentration` (`<LOD` → 1 ppm) |
-| `density` | g/cm³ | `density_mean_g_cm3` |
-| `susceptibility` | log10 SI | `susceptibility_mean_SI` (>0) |
-| `conductivity_100kHz` | log10 S/m | `conductivity_mean_S_m_100kHz` (zeros → 0.01) |
+| Cu grade | log10 ppm | μ, σ |
+| Density | g/cm³ | μ, σ |
+| Magnetic susceptibility | log10 SI | μ, σ |
 
-**`conductivity_100kHz` is intentional naming.** KT-20 at 100 kHz on small
-core specimens (Austin et al. 2024, §5.2.4). It is **not** MT-equivalent bulk
-conductivity. 711 / 1,250 finite values are exact 0 and are lifted to 0.01 S/m
-before log10 (`CLONCURRY_COND_FLOOR_S_M`).
+Derived quantities (planned): exceedance probability P(Cu > cutoff), block averages over sub-block points, tonnage.
 
-Architecture default for district hold-out: **width = 256**, **depth = 4**.
+## Evaluation
 
----
+Every result is compared under the same folds with:
 
-## Methodology — memorization vs hold-out
+- **mean** — training mean;
+- **IDW** — inverse-distance weighting;
+- **ordinary kriging** — GeoStats.jl, variogram refitted per fold on training holes only.
 
-| Run | What it is | Cite as success? |
-|---|---|---|
-| `tmp_cloncurry_prior_eh/` | Ernest Henry box, **all** labels, 104 grade cells | **No** — in-sample fit |
-| `tmp_cloncurry_prior_eh_group_holdout/` | EH 7/2/2 holes | Diagnostic only — showed EH is too thin |
-| `tmp_cloncurry_prior_district_holdout_w256_d4/` | District **84/18/18**, 53 ch, Z=200 m | Old leaky setup; before geology |
-| `…_w256_d4_geology/` | Same split + geology (69 ch), Z=200 m | Old leaky setup; geology score |
-| `…_w256_d4_z100/` | Same split + geology, **Z=100 m**, 100 epochs | Old leaky setup; finest mesh |
+Cross-validation is grouped by drillhole (leave-one-hole-out). Metrics are RMSE, R², skill relative to the mean, and coverage of the 90 % interval.
 
-Naive reference on district: train-mean RMSE on test holes for grade /
-density / susceptibility; conductivity **floor** (−2 = log10 0.01 S/m) for
-`conductivity_100kHz`.
+A method is considered useful only if it clearly beats the mean *and* is comparable to or better than kriging.
 
----
+## Data
 
-## Results — district drillhole hold-out
+Data are not in this repository.
 
-**Old setup, reference only.** These numbers come from runs that hid test-hole
-*labels* (grade / density / susceptibility / `conductivity_100kHz`) but still
-built geochemistry, lithology, and coverage channels from **every** specimen,
-including test holes. Test-hole pXRF therefore entered the feature stack. Do
-not cite them as a leak-free hold-out. A train-only-input rerun has not been
-scored yet.
+| Variable | Default |
+|---|---|
+| `CLONCURRY_ROOT` | `~/Desktop/datasets4HY/Cloncurry_integrated_2026-09-17` (METAL package, CC BY 4.0, Austin et al. 2024) |
 
-All rows below use the same collar split: **84 / 18 / 18** holes,
-`split_seed=2026`, samples 1,105 / 251 / 230, width=256 / depth=4.
+Each deposit has a site file in `sites/` (`ernest_henry.toml`, `cannington.toml`, `starra.toml`, `osborne.toml`) giving its box, CRS (EPSG:28354), properties and covariates.
 
-### With structural geology (Z = 200 m)
-
-Source:
-`tmp_cloncurry_prior_district_holdout_w256_d4_geology/cloncurry_holdout_report.txt`
-
-| property | test RMSE | naive | beats naive? |
-|---|---:|---:|---|
-| grade (log10 Cu) | **1.337** | 1.339 | **yes** (barely) |
-| density | 0.590 | 0.469 | **no** |
-| susceptibility | **1.341** | 1.612 | **yes** |
-| `conductivity_100kHz` | **1.001** | 1.393 (floor) | **yes** |
-
-### Before geology (same split, 53 channels, Z = 200 m)
-
-| property | test RMSE | naive | beats naive? |
-|---|---:|---:|---|
-| grade (log10 Cu) | **1.309** | 1.339 | **yes** |
-| density | 0.606 | 0.469 | **no** |
-| susceptibility | **1.364** | 1.612 | **yes** |
-| `conductivity_100kHz` | **1.006** | 1.393 (floor) | **yes** |
-
-### Finest mesh — Z = 100 m (100 epochs; same old setup)
-
-Source:
-`tmp_cloncurry_prior_district_holdout_w256_d4_z100/cloncurry_holdout_report.txt`
-
-| property | test RMSE | naive | beats naive? | vs geology Z=200 |
-|---|---:|---:|---|---:|
-| grade (log10 Cu) | **1.263** | 1.339 | **yes** | 1.337 → better |
-| density | 0.600 | 0.469 | **no** | 0.590 → slightly worse |
-| susceptibility | **1.340** | 1.612 | **yes** | 1.341 ≈ same |
-| `conductivity_100kHz` | **0.914** | 1.393 (floor) | **yes** | 1.001 → better |
-
-**Density — five interventions, none beat naive (0.469):**
-
-| # | Intervention | density test RMSE |
-|---|---|---:|
-| 1 | Capacity ↑ (256/4) | 0.606 |
-| 2 | Capacity ↓ (64/2, EH) | 0.267 (still > naive 0.187) |
-| 3 | More holes (84 vs 7) | 0.606 |
-| 4 | Structural geology | 0.590 |
-| 5 | Z refine 200 → 100 m | 0.600 |
-
-### Figures — district predicted Cu (same old checkpoints)
-
-![Cloncurry district Z=100 m — predicted Cu blocks + drill traces](docs/assets/cloncurry_district_z100_cu_iso.png)
-
-![Cloncurry district geology (Z=200 m) — predicted Cu + drill traces](docs/assets/cloncurry_district_geology_cu_iso.png)
-
----
-
-## How to run
-
-```bash
-julia --project=. -e 'using Pkg; Pkg.instantiate()'
-
-# Full-data train (default = district sample AABB)
-julia --project=. examples/train_cloncurry_prior.jl
-
-# District drillhole hold-out (84/18/18 of 120 named holes; default Z=100 m)
-SMARTPRIOR_WORK=tmp_cloncurry_prior_district_holdout_w256_d4_z100 \
-  julia --project=. examples/holdout_cloncurry_prior.jl
-
-# Directional variogram / anisotropy (writes tmp_cloncurry_variogram/)
-julia --project=. examples/variogram_cloncurry.jl
-
-# VTK + Cu figure — current district Z=100 checkpoint
-SMARTPRIOR_WORK=tmp_cloncurry_prior_district_holdout_w256_d4_z100 \
-  SMARTPRIOR_BOX=district SMARTPRIOR_WIDTH=256 SMARTPRIOR_DEPTH=4 \
-  SMARTPRIOR_CELL_M=2300 SMARTPRIOR_CELL_Z=100 \
-  julia --project=. examples/export_cloncurry_blockmodel.jl
-```
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `CLONCURRY_ROOT` | `~/Desktop/datasets4HY/Cloncurry_integrated_2026-09-17` | METAL package |
-| `SMARTPRIOR_WORK` | `tmp_cloncurry_prior*` | checkpoints + reports |
-| `SMARTPRIOR_BOX` | `district` | `district` / `work` / `ernest_henry` |
-| `SMARTPRIOR_WIDTH` / `DEPTH` | 256 / 4 | MLP size |
-| `SMARTPRIOR_EPOCHS` | 50 (train) / 250 (hold-out) | budget |
-| `SMARTPRIOR_SPLIT_SEED` | 2026 | collar split |
-
-Tests: `julia --project=. -e 'using Pkg; Pkg.test()'`.
-
----
+Detection-limit policy, applied to the district before any deposit filter: the censoring limit is the 1st percentile of positive values. This gives 5.8 ppm for Cu and 0.0356 S/m for conductivity.
 
 ## Repository layout
 
 | Path | Role |
 |---|---|
-| `src/CloncurryIO.jl` | METAL + geology readers |
-| `src/{Grid,Features,PriorNet,Losses,Train,Metrics}.jl` | neural-field stack |
-| `examples/train_cloncurry_prior.jl` | full-data train |
-| `examples/holdout_cloncurry_prior.jl` | drillhole-group hold-out |
-| `examples/export_cloncurry_blockmodel.jl` | VTK (WriteVTK) + Cu figure (GLMakie) |
-| `examples/variogram_cloncurry.jl` | directional variogram + anisotropy |
-| `examples/kriging_cloncurry_petro.jl` | GeoStats ordinary-kriging baseline |
-| `tmp_cloncurry_prior*/` | gitignored run outputs |
+| `src/Schema.jl` | `SampleTable`, `PropertySpec`, `training_mask` |
+| `src/Covariates.jl` | point-wise covariates |
+| `src/Sites.jl` | `load_site` and TOML site configs |
+| `src/CloncurryIO.jl` | Cloncurry adapter → `SampleTable` |
+| `src/SyntheticFields.jl` | continuous Gaussian random fields (in progress) |
+| `examples/feasibility_loho.jl` | real-data leave-one-hole-out comparison |
+| `examples/synthetic_exp1.jl` | semi-synthetic benchmark, experiment 1 (in progress) |
+| `docs/` | reports |
 
----
+**Legacy path.** `src/{Grid,Features,PriorNet,Losses,Train,Metrics}.jl` and `examples/{train,holdout}_cloncurry_prior.jl` implement the earlier grid-based pipeline. It used test-hole pXRF as input, so its published numbers are not leak-free. It is kept only until Phase 2 replaces it, and should not be used for new results.
 
-## Open questions
+The MT-era package is archived as tag `v0-mt-archive`.
 
-1. **Leak-free hold-out** — rebuild features from train holes only, then
-   rescore. Until then, density / grade / susceptibility / conductivity
-   numbers above are reference, not claims.
-2. **Density** — under the old leaky setup it still lost to naive after
-   capacity ↑/↓, more holes, structural geology, and Z=100 m (**0.600** vs
-   **0.469**). Revisit after the leak-free rerun.
-3. **Magnetics** — present in the METAL package; not wired. Waiting on
-   explicit approval before adding channels.
-4. **`conductivity_100kHz`** — old leaky Z=100 run beat the −2 floor
-   (**0.914** vs 1.393). Zeros→floor and specimen vs bulk remain caveats.
+## How to run
 
----
+```bash
+julia --project=. -e 'using Pkg; Pkg.instantiate()'
+julia --project=. -e 'using Pkg; Pkg.test()'
 
-## Data licensing
+# Real-data feasibility (writes tmp_feasibility/)
+julia --project=. examples/feasibility_loho.jl
+```
 
-Cloncurry METAL is CC BY 4.0 (Austin et al., 2024). Gravity / magnetic / MT
-products in the same folder have their own attributions; this pipeline does
-not open them.
+## Roadmap
 
----
+1. Semi-synthetic benchmark: hole geometry × correlation length (experiment 1), then multiple properties, lithology and censoring.
+2. Phase 2: shared multi-output network, censored likelihood, block averaging.
+3. Visualisation: GLMakie block viewer showing μ, σ and exceedance probability, faded by distance to data; VTK export.
 
 ## License
 
-MIT. See `LICENSE`.
+MIT. See `LICENSE`. Data retain their own licences.
