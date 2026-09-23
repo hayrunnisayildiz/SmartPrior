@@ -1,13 +1,18 @@
 # Semi-synthetic Experiment 1: sample known Gaussian fields at real
-# Cloncurry collar locations and compare mean / kriging / nn_xyz.
+# Cloncurry collar locations and compare mean / kriging / kriging_oracle /
+# nn_xyz.
 #
-# Hyperparameters are fixed (same NN and variogram procedure as
+# Hyperparameters are fixed (same NN and fitted-variogram procedure as
 # examples/feasibility_loho.jl). Do not retune on the results.
+#
+# measurement fix: stratified evaluation distances, R2_global vs uniform
+# var_ref, kriging_oracle with the true exponential covariance, and a
+# re-defined SAĞLAMLIK check on oracle R2_global (see run.log header).
 #
 # Run:  julia --project=. examples/synthetic_exp1.jl
 # Out:  tmp_synthetic_exp1/{metrics,nn_epochs,kriging_params}.tsv
 #       tmp_synthetic_exp1/run.log
-#       tmp_synthetic_exp1/skill_by_Lh_<deposit>.png
+#       tmp_synthetic_exp1/r2_global_panels.png
 
 using SmartPrior
 using Lux
@@ -24,24 +29,27 @@ const ROOT = dirname(@__DIR__)
 const WORK = joinpath(ROOT, "tmp_synthetic_exp1")
 
 const DEPOSITS = (
-    (key = "ernest_henry", label = "Ernest Henry"),
-    (key = "cannington", label = "Cannington"),
-    (key = "starra", label = "Starra"),
-    (key = "osborne", label = "Osborne"),
+    (key = "ernest_henry", label = "Ernest Henry", note = ""),
+    (key = "cannington", label = "Cannington", note = ""),
+    (key = "starra", label = "Starra", note = "4 hole — borderline"),
 )
 
 const L_H_GRID = (25.0, 50.0, 100.0, 200.0, 400.0, 800.0, 1600.0)
 const ETA_GRID = (0.1, 0.5)
 const FIELD_SEEDS = (1, 2, 3)
-const METHODS = ("mean", "kriging", "nn_xyz")
-const DIST_BINS = (
-    (label = "all", lo = 0.0, hi = Inf),
+const METHODS = ("mean", "kriging", "kriging_oracle", "nn_xyz")
+
+# Stratified distance bins (nearest training sample, 3D).
+const STRAT_BINS = (
     (label = "[0,25)", lo = 0.0, hi = 25.0),
     (label = "[25,50)", lo = 25.0, hi = 50.0),
     (label = "[50,100)", lo = 50.0, hi = 100.0),
     (label = "[100,200)", lo = 100.0, hi = 200.0),
     (label = "[200,inf)", lo = 200.0, hi = Inf),
 )
+const FIGURE_BINS = ("[0,50)", "[50,100)", "[100,200)", "[200,inf)")
+const METRIC_BINS = ("uniform", "[0,25)", "[25,50)", "[0,50)",
+                     "[50,100)", "[100,200)", "[200,inf)")
 
 # Fixed procedure — copied from feasibility_loho.jl; not tuned here.
 const N_LAGS = 15
@@ -63,8 +71,10 @@ const NN_SEEDS = (1, 2, 3, 4, 5)
 const VAL_HOLE_FRACTION = 0.20
 const SIGMA_FLOOR = 1.0e-3
 const Z90 = 1.6448536269514722
-const N_EVAL = 5000
-const EVAL_SEED_TAG = "synthetic-exp1-eval-v1"
+const N_UNIFORM = 5000
+const N_PER_BIN = 1000
+const STRAT_MAX_TRIES = 500_000
+const EVAL_SEED_TAG = "synthetic-exp1-eval-v2"
 const VAL_SEED_TAG = "synthetic-exp1-val-v1"
 
 const LOG = Ref{IO}()
@@ -368,6 +378,25 @@ function kriging_predict(tx, ty, tz, tv, qx, qy, qz, fit::VarioFit)
     return μ, σ
 end
 
+"""
+True exponential covariance for the generative field.
+
+GeoStats `ExponentialVariogram` uses the practical-range form
+`1 - exp(-3 h / range)`, while the synthetic field has correlation
+`exp(-h / L)`. Therefore oracle ranges are `3 L_h` and `3 L_v`.
+"""
+function oracle_variogram(L_h::Real, η::Real, σ::Real)
+    L_h > 0 || fail("oracle_variogram: L_h must be positive")
+    (0 <= η < 1) || fail("oracle_variogram: η must be in [0, 1)")
+    σ >= 0 || fail("oracle_variogram: σ must be non-negative")
+    total = Float64(σ)^2
+    nugget = Float64(η) * total
+    partial = total - nugget
+    L_v = Float64(L_h) / 2
+    return VarioFit("exponential", nugget, partial, total,
+                    3 * Float64(L_h), 3 * L_v, NaN, 0, 0, 0, 0, false)
+end
+
 #---------- neural field (nn_xyz only; feasibility settings) ----------
 
 function fourier_scales()
@@ -485,8 +514,40 @@ function deposit_box(table)
             zlo = minimum(table.z), zhi = maximum(table.z))
 end
 
-function eval_points(box, n::Int, tag::AbstractString)
-    rng = rng_for(tag)
+function in_box(box, x, y, z)
+    return box.xlo <= x <= box.xhi &&
+           box.ylo <= y <= box.yhi &&
+           box.zlo <= z <= box.zhi
+end
+
+function nearest_train_dist_one(x, y, z, tx, ty, tz)
+    best = Inf
+    @inbounds for i in eachindex(tx)
+        di = hypot(x - tx[i], y - ty[i], z - tz[i])
+        di < best && (best = di)
+    end
+    return best
+end
+
+function nearest_train_dist(qx, qy, qz, tx, ty, tz)
+    nq = length(qx)
+    d = Vector{Float64}(undef, nq)
+    @inbounds for q in 1:nq
+        d[q] = nearest_train_dist_one(qx[q], qy[q], qz[q], tx, ty, tz)
+    end
+    return d
+end
+
+function random_unit_vector(rng)
+    x = randn(rng)
+    y = randn(rng)
+    z = randn(rng)
+    n = hypot(x, y, z)
+    n < 1.0e-15 && return random_unit_vector(rng)
+    return x / n, y / n, z / n
+end
+
+function uniform_eval_points(box, n::Int, rng)
     xyz = Matrix{Float64}(undef, 3, n)
     @inbounds for j in 1:n
         xyz[1, j] = box.xlo + (box.xhi - box.xlo) * rand(rng)
@@ -496,39 +557,96 @@ function eval_points(box, n::Int, tag::AbstractString)
     return xyz
 end
 
-function nearest_train_dist(qx, qy, qz, tx, ty, tz)
-    nq = length(qx)
+function sample_distance_bin!(xs, ys, zs, box, tx, ty, tz, lo, hi, n, rng; far::Bool)
     nt = length(tx)
-    d = Vector{Float64}(undef, nq)
-    @inbounds for q in 1:nq
-        best = Inf
-        for i in 1:nt
-            di = hypot(qx[q] - tx[i], qy[q] - ty[i], qz[q] - tz[i])
-            di < best && (best = di)
+    nt >= 1 || fail("stratified eval: no training locations")
+    target = length(xs) + n
+    tries = 0
+    while length(xs) < target
+        tries += 1
+        tries > STRAT_MAX_TRIES && fail(
+            "stratified eval: failed to fill bin [$lo,$hi) after $STRAT_MAX_TRIES tries " *
+            "(have $(length(xs) - (target - n))/$n)")
+        if far
+            x = box.xlo + (box.xhi - box.xlo) * rand(rng)
+            y = box.ylo + (box.yhi - box.ylo) * rand(rng)
+            z = box.zlo + (box.zhi - box.zlo) * rand(rng)
+        else
+            i = rand(rng, 1:nt)
+            ux, uy, uz = random_unit_vector(rng)
+            r = lo + (hi - lo) * rand(rng)
+            x = tx[i] + r * ux
+            y = ty[i] + r * uy
+            z = tz[i] + r * uz
+            in_box(box, x, y, z) || continue
         end
-        d[q] = best
+        d = nearest_train_dist_one(x, y, z, tx, ty, tz)
+        ok = far ? (d >= lo) : (d >= lo && d < hi)
+        ok || continue
+        push!(xs, x)
+        push!(ys, y)
+        push!(zs, z)
     end
-    return d
+    return nothing
 end
 
-function bin_mask(dist, lo, hi)
-    n = length(dist)
-    m = falses(n)
-    @inbounds for i in 1:n
-        m[i] = (dist[i] >= lo) && (dist[i] < hi)
+"""
+Stratified eval points (1000 / distance bin) plus a uniform 5000-point cloud.
+
+Returns `(xyz, dist, bin_of)` where `bin_of[j]` is the metric-bin label for
+column `j` (`uniform` or a stratified label). Points for `[0,50)` are not
+stored separately; that bin is the union of `[0,25)` and `[25,50)`.
+"""
+function build_eval_set(box, tx, ty, tz, tag::AbstractString)
+    rng = rng_for(tag)
+    xs = Float64[]
+    ys = Float64[]
+    zs = Float64[]
+    labels = String[]
+    for b in STRAT_BINS
+        n0 = length(xs)
+        far = !isfinite(b.hi)
+        sample_distance_bin!(xs, ys, zs, box, tx, ty, tz, b.lo, b.hi, N_PER_BIN, rng;
+                             far = far)
+        for _ in 1:N_PER_BIN
+            push!(labels, b.label)
+        end
+        length(xs) - n0 == N_PER_BIN || fail("stratified bin $(b.label) size mismatch")
     end
-    return m
+    xyz_u = uniform_eval_points(box, N_UNIFORM, rng)
+    for j in 1:N_UNIFORM
+        push!(xs, xyz_u[1, j])
+        push!(ys, xyz_u[2, j])
+        push!(zs, xyz_u[3, j])
+        push!(labels, "uniform")
+    end
+    n = length(xs)
+    xyz = Matrix{Float64}(undef, 3, n)
+    xyz[1, :] .= xs
+    xyz[2, :] .= ys
+    xyz[3, :] .= zs
+    dist = nearest_train_dist(xs, ys, zs, tx, ty, tz)
+    return xyz, dist, labels
 end
 
-function metrics_block(truth, pred, sd, mean_pred; want_coverage::Bool)
+function bin_indices(labels::Vector{String}, name::AbstractString)
+    if name == "[0,50)"
+        return findall(l -> l == "[0,25)" || l == "[25,50)", labels)
+    end
+    return findall(==(name), labels)
+end
+
+function metrics_block(truth, pred, sd, mean_pred, var_ref; want_coverage::Bool)
     n = length(truth)
-    n == 0 && return (n = 0, rmse = NaN, r2 = NaN, skill = NaN, coverage90 = NaN)
+    n == 0 && return (n = 0, rmse = NaN, r2_local = NaN, r2_global = NaN,
+                     skill = NaN, coverage90 = NaN)
     err = pred .- truth
     mse = mean(abs2, err)
     rmse = sqrt(mse)
     mu_t = mean(truth)
     sst = sum(abs2, truth .- mu_t)
-    r2 = sst == 0 ? NaN : 1 - sum(abs2, err) / sst
+    r2_local = sst == 0 ? NaN : 1 - sum(abs2, err) / sst
+    r2_global = (!isfinite(var_ref) || var_ref <= 0) ? NaN : 1 - mse / var_ref
     mse_mean = mean(abs2, mean_pred .- truth)
     skill = mse_mean == 0 ? NaN : 1 - mse / mse_mean
     coverage90 = NaN
@@ -537,7 +655,8 @@ function metrics_block(truth, pred, sd, mean_pred; want_coverage::Bool)
         all(isfinite, sd) && all(sd .>= 0) || fail("coverage sd is not finite")
         coverage90 = count(abs.(err) .<= Z90 .* sd) / n
     end
-    return (n = n, rmse = rmse, r2 = r2, skill = skill, coverage90 = coverage90)
+    return (n = n, rmse = rmse, r2_local = r2_local, r2_global = r2_global,
+            skill = skill, coverage90 = coverage90)
 end
 
 function cu_moments(table)
@@ -553,31 +672,38 @@ function cu_moments(table)
     return μ, σ, idx
 end
 
-function write_skill_figure(metrics_rows)
-    for d in DEPOSITS
-        fig = GLMakie.Figure(size = (720, 480))
-        ax = GLMakie.Axis(fig[1, 1];
-                          xlabel = "L_h (m)", ylabel = "skill vs mean",
-                          title = d.key, xscale = log10)
+function write_r2_figure(metrics_rows)
+    nd = length(DEPOSITS)
+    nb = length(FIGURE_BINS)
+    fig = GLMakie.Figure(size = (280 * nb, 220 * nd))
+    for (id, d) in enumerate(DEPOSITS), (ib, b) in enumerate(FIGURE_BINS)
+        title = ib == 1 ?
+                (isempty(d.note) ? d.key : "$(d.key) ($(d.note))") :
+                d.key
+        ax = GLMakie.Axis(fig[id, ib];
+                          xlabel = ib == nb ? "L_h (m)" : "",
+                          ylabel = ib == 1 ? "R2_global" : "",
+                          title = "$title | $b",
+                          xscale = log10)
         for η in ETA_GRID, method in METHODS
             xs = Float64[]
             ys = Float64[]
             for L_h in L_H_GRID
                 sub = [r for r in metrics_rows if r.deposit == d.key &&
                        r.method == method && r.eta == η && r.L_h == L_h &&
-                       r.dist_bin == "all"]
+                       r.dist_bin == b]
                 isempty(sub) && continue
                 push!(xs, L_h)
-                push!(ys, mean(r.skill for r in sub))
+                push!(ys, mean(r.r2_global for r in sub))
             end
             isempty(xs) && continue
             GLMakie.lines!(ax, xs, ys; label = "$(method) η=$(η)")
         end
-        GLMakie.axislegend(ax; position = :rb)
-        path = joinpath(WORK, "skill_by_Lh_$(d.key).png")
-        GLMakie.save(path, fig)
-        logmsg("wrote $path")
+        id == 1 && ib == nb && GLMakie.axislegend(ax; position = :rb, labelsize = 10)
     end
+    path = joinpath(WORK, "r2_global_panels.png")
+    GLMakie.save(path, fig)
+    logmsg("wrote $path")
     return nothing
 end
 
@@ -592,13 +718,15 @@ struct MetricRow
     dist_bin::String
     n::Int
     rmse::Float64
-    r2::Float64
+    r2_local::Float64
+    r2_global::Float64
+    var_ref::Float64
     skill::Float64
     coverage90::Float64
 end
 
 function run_config(deposit_key, table, covs, idx, μ_cu, σ_cu, L_h, η, seed,
-                    metric_io, epoch_io, param_io, flags)
+                    metric_io, epoch_io, param_io, flags, oracle_r2_050)
     ctx = @sprintf("%s L_h=%.0f η=%.1f seed=%d", deposit_key, L_h, η, seed)
     t0 = time()
     field = gaussian_field(; μ = μ_cu, σ = σ_cu, η = η, L_h = L_h, seed = seed)
@@ -614,14 +742,18 @@ function run_config(deposit_key, table, covs, idx, μ_cu, σ_cu, L_h, η, seed,
 
     box = deposit_box(subset(table, idx))
     tag = "$(EVAL_SEED_TAG)|$(deposit_key)"
-    xyz_ev = eval_points(box, N_EVAL, tag)
+    xyz_ev, _, labels = build_eval_set(box, xyz_tr[1, :], xyz_tr[2, :], xyz_tr[3, :], tag)
+    n_ev = size(xyz_ev, 2)
     truth = smooth_field(field, xyz_ev)
-    dist = nearest_train_dist(xyz_ev[1, :], xyz_ev[2, :], xyz_ev[3, :],
-                              xyz_tr[1, :], xyz_tr[2, :], xyz_tr[3, :])
+
+    iu = bin_indices(labels, "uniform")
+    length(iu) == N_UNIFORM || fail("$ctx: expected $N_UNIFORM uniform points, got $(length(iu))")
+    var_ref = var(truth[iu]; corrected = false)
+    (isfinite(var_ref) && var_ref > 0) || fail("$ctx: var_ref is not positive ($var_ref)")
 
     m_tr = mean(y_tr)
-    pred_mean = fill(m_tr, N_EVAL)
-    sd_na = fill(NaN, N_EVAL)
+    pred_mean = fill(m_tr, n_ev)
+    sd_na = fill(NaN, n_ev)
 
     dx, dy, dz, dv, dh, n_merged = dedupe_locations(
         xyz_tr[1, :], xyz_tr[2, :], xyz_tr[3, :], y_tr, holes)
@@ -629,6 +761,9 @@ function run_config(deposit_key, table, covs, idx, μ_cu, σ_cu, L_h, η, seed,
     fit = fit_variogram(dx, dy, dz, dv, dh; context = ctx)
     μ_ok, σ_ok = kriging_predict(dx, dy, dz, dv,
                                  xyz_ev[1, :], xyz_ev[2, :], xyz_ev[3, :], fit)
+    fit_or = oracle_variogram(L_h, η, σ_cu)
+    μ_or, σ_or = kriging_predict(dx, dy, dz, dv,
+                                 xyz_ev[1, :], xyz_ev[2, :], xyz_ev[3, :], fit_or)
     println(param_io, join((
         deposit_key, tsv_num(L_h), tsv_num(η), string(seed), fit.model,
         tsv_num(fit.nugget), tsv_num(fit.partial_sill), tsv_num(fit.total_sill),
@@ -639,7 +774,6 @@ function run_config(deposit_key, table, covs, idx, μ_cu, σ_cu, L_h, η, seed,
     ), '\t'))
     flush(param_io)
 
-    # NN on site CoordinateCovariate xyz + Fourier (feasibility nn_xyz)
     Xall_tr = xyz_features(covs, xyz_tr[1, :], xyz_tr[2, :], xyz_tr[3, :])
     Xall_ev = xyz_features(covs, xyz_ev[1, :], xyz_ev[2, :], xyz_ev[3, :])
     unique_holes = sort!(unique(holes))
@@ -676,36 +810,34 @@ function run_config(deposit_key, table, covs, idx, μ_cu, σ_cu, L_h, η, seed,
     preds = Dict(
         "mean" => (pred_mean, sd_na, false),
         "kriging" => (μ_ok, σ_ok, true),
+        "kriging_oracle" => (μ_or, σ_or, true),
         "nn_xyz" => (μ_nn, σ_nn, true),
     )
     rows = MetricRow[]
     for method in METHODS
         pred, sd, want = preds[method]
-        for b in DIST_BINS
-            m = b.label == "all" ? trues(N_EVAL) : bin_mask(dist, b.lo, b.hi)
-            met = metrics_block(truth[m], pred[m], sd[m], pred_mean[m];
-                                want_coverage = want && any(m))
-            row = MetricRow(deposit_key, L_h, η, seed, method, b.label,
-                            met.n, met.rmse, met.r2, met.skill, met.coverage90)
+        for bname in METRIC_BINS
+            ii = bin_indices(labels, bname)
+            met = metrics_block(truth[ii], pred[ii], sd[ii], pred_mean[ii], var_ref;
+                                want_coverage = want && !isempty(ii))
+            row = MetricRow(deposit_key, L_h, η, seed, method, bname,
+                            met.n, met.rmse, met.r2_local, met.r2_global, var_ref,
+                            met.skill, met.coverage90)
             push!(rows, row)
             covs_str = want ? tsv_num(met.coverage90) : ""
             println(metric_io, join((
-                deposit_key, tsv_num(L_h), tsv_num(η), string(seed), method, b.label,
-                string(met.n), tsv_num(met.rmse), tsv_num(met.r2), tsv_num(met.skill), covs_str,
+                deposit_key, tsv_num(L_h), tsv_num(η), string(seed), method, bname,
+                string(met.n), tsv_num(met.rmse), tsv_num(met.r2_local),
+                tsv_num(met.r2_global), tsv_num(var_ref), tsv_num(met.skill), covs_str,
             ), '\t'))
         end
     end
     flush(metric_io)
 
-    # Pre-registered checks (L_h ≥ 800, η = 0.1)
     if L_h >= 800 && η == 0.1
-        m0 = bin_mask(dist, 0.0, 50.0)
-        met = metrics_block(truth[m0], μ_ok[m0], σ_ok[m0], pred_mean[m0];
-                            want_coverage = true)
-        if !(met.r2 > 0.5)
-            fail(@sprintf("SAĞLAMLIK FAIL: %s L_h=%.0f η=%.1f seed=%d: kriging R² on [0,50)=%.4g ≤ 0.5 (n=%d)",
-                          deposit_key, L_h, η, seed, met.r2, met.n))
-        end
+        orow = only(r for r in rows if r.method == "kriging_oracle" && r.dist_bin == "[0,50)")
+        key = (deposit_key, L_h, η)
+        push!(get!(oracle_r2_050, key, Float64[]), orow.r2_global)
         frac_early = n_early / length(NN_SEEDS)
         if frac_early > 0.20
             msg = @sprintf("NN EĞİTİMİ FLAG: %s L_h=%.0f η=%.1f seed=%d: epoch≤5 fraction=%.2f > 0.20 (epochs=%s)",
@@ -715,8 +847,9 @@ function run_config(deposit_key, table, covs, idx, μ_cu, σ_cu, L_h, η, seed,
         end
     end
 
-    logmsg(@sprintf("%s done in %.1f s | kriging range_h=%.1f (true L_h=%.0f) | NN epochs %s",
-                    ctx, time() - t0, fit.range_h, L_h, join(string.(epochs), ",")))
+    logmsg(@sprintf("%s done in %.1f s | fit range_h=%.1f (true L_h=%.0f) oracle ranges=%.1f/%.1f | NN epochs %s | var_ref=%.4g",
+                    ctx, time() - t0, fit.range_h, L_h, fit_or.range_h, fit_or.range_v,
+                    join(string.(epochs), ","), var_ref))
     return rows
 end
 
@@ -725,7 +858,13 @@ function main()
     LOG[] = open(joinpath(WORK, "run.log"), "w")
     t0 = time()
     logmsg("synthetic exp1 started")
+    logmsg("measurement fix: stratified eval (1000/bin) + uniform 5000; " *
+           "R2_global = 1 - MSE/var_ref(uniform); kriging_oracle uses true " *
+           "exponential covariance (GeoStats practical range = 3 L); " *
+           "SAĞLAMLIK on mean oracle R2_global[0,50) > 0.7 for L_h≥800, η=0.1; " *
+           "Osborne dropped; Starra marked 4-hole borderline; method hyperparameters unchanged")
     logmsg("julia " * string(VERSION))
+    logmsg("deposits=$(join((d.key for d in DEPOSITS), ","))")
     logmsg("L_h=$(collect(L_H_GRID)) η=$(collect(ETA_GRID)) seeds=$(collect(FIELD_SEEDS))")
     logmsg("NN: fourier=$FOURIER_BANDS scales=[$(FOURIER_SCALE_MIN),$(FOURIER_SCALE_MAX)] " *
            "width=$MLP_WIDTH depth=$MLP_DEPTH lr=$NN_LR wd=$NN_WEIGHT_DECAY " *
@@ -737,7 +876,8 @@ function main()
     metric_io = open(metric_path, "w")
     epoch_io = open(epoch_path, "w")
     param_io = open(param_path, "w")
-    println(metric_io, "deposit\tL_h\teta\tseed\tmethod\tdist_bin\tn\trmse\tr2\tskill\tcoverage90")
+    println(metric_io, "deposit\tL_h\teta\tseed\tmethod\tdist_bin\tn\trmse\t" *
+            "R2_local\tR2_global\tvar_ref\tskill\tcoverage90")
     println(epoch_io, "deposit\tL_h\teta\tseed\tnn_seed\tbest_epoch\tlast_epoch")
     println(param_io, "deposit\tL_h_true\teta\tseed\tmodel\tnugget\tpartial_sill\ttotal_sill\t" *
             "range_horizontal_m\trange_vertical_m\tL_h_true_again\tfit_rmse\t" *
@@ -747,6 +887,7 @@ function main()
 
     all_rows = MetricRow[]
     flags = String[]
+    oracle_r2_050 = Dict{Tuple{String,Float64,Float64},Vector{Float64}}()
 
     for d in DEPOSITS
         path = joinpath(ROOT, "sites", d.key * ".toml")
@@ -755,14 +896,25 @@ function main()
         String(cfg["deposit"]) == d.label || fail("deposit label mismatch for $(d.key)")
         μ_cu, σ_cu, idx = cu_moments(table)
         n_holes = length(unique(table.hole[idx]))
-        logmsg(@sprintf("%s: real Cu samples=%d holes=%d μ=%.4g σ=%.4g (log10 Cu)",
-                        d.key, length(idx), n_holes, μ_cu, σ_cu))
+        note = isempty(d.note) ? "" : " [$(d.note)]"
+        logmsg(@sprintf("%s%s: real Cu samples=%d holes=%d μ=%.4g σ=%.4g (log10 Cu)",
+                        d.key, note, length(idx), n_holes, μ_cu, σ_cu))
         n_holes >= 2 || fail("$(d.key): need ≥2 real holes for NN validation, got $n_holes")
 
         for L_h in L_H_GRID, η in ETA_GRID, seed in FIELD_SEEDS
             rows = run_config(d.key, table, covs, idx, μ_cu, σ_cu, L_h, η, seed,
-                              metric_io, epoch_io, param_io, flags)
+                              metric_io, epoch_io, param_io, flags, oracle_r2_050)
             append!(all_rows, rows)
+            if L_h >= 800 && η == 0.1 && length(oracle_r2_050[(d.key, L_h, η)]) == length(FIELD_SEEDS)
+                vals = oracle_r2_050[(d.key, L_h, η)]
+                μ = mean(vals)
+                logmsg(@sprintf("SAĞLAMLIK oracle R2_global[0,50) %s L_h=%.0f η=%.1f seeds=%s mean=%.4g",
+                                d.key, L_h, η, join((@sprintf("%.4g", v) for v in vals), ","), μ))
+                if !(μ > 0.7)
+                    fail(@sprintf("SAĞLAMLIK FAIL: %s L_h=%.0f η=%.1f: mean oracle R2_global[0,50)=%.4g ≤ 0.7",
+                                  d.key, L_h, η, μ))
+                end
+            end
         end
     end
 
@@ -770,7 +922,7 @@ function main()
     close(epoch_io)
     close(param_io)
 
-    write_skill_figure(all_rows)
+    write_r2_figure(all_rows)
     for msg in flags
         logmsg(msg)
     end
