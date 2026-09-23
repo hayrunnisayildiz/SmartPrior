@@ -104,9 +104,13 @@ end
 """
     depth_below_top(g::PriorGrid) -> Array{Float64,3}
 
-Cell-centre depth measured from the top edge of the grid, in metres. Unlike
-`cz` this drops the origin offset, so it stays a true depth on grids whose
-`origin[3]` places the datum above the ground surface (air layers).
+`cz - z[1]` at each cell centre, in metres. Subtracting the first edge
+cancels `origin[3]`.
+
+Warning: the value is height above `z[1]`. On an elevation-up grid that
+edge is the bottom of the box, not the ground surface, so this is not depth
+below the top. It is a leftover of the z-down grid. The formula is unchanged
+so existing Cloncurry results stay reproducible.
 """
 function depth_below_top(g::PriorGrid)
     nx, ny, nz = size(g)

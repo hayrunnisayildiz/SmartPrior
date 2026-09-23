@@ -11,5 +11,6 @@ using SmartPrior
     include("TestCloncurryIO.jl")
     include("TestSchema.jl")
     include("TestDesurvey.jl")
+    include("TestKeivitsaIO.jl")
     include("TestSyntheticFields.jl")
 end

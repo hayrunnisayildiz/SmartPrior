@@ -3,30 +3,43 @@
 # the rows are not already Cloncurry-shaped, an adapter. It is not a change
 # to the network.
 
+const _SITE_CRS = Dict(
+    "cloncurry" => "EPSG:28354",
+    "keivitsa" => "EPSG:2393",
+)
+
 """
     load_site(path) -> (table::SampleTable, covariates, cfg)
 
 Read a site TOML file. `source = "cloncurry"` loads rows through
-[`cloncurry_sample_table`](@ref). The dataset root is `root` in the file
-(relative to the file's directory), otherwise `CLONCURRY_ROOT`, otherwise
-the usual Desktop dump of `Cloncurry_integrated_2026-09-17`.
+[`cloncurry_sample_table`](@ref). `source = "keivitsa"` loads rows through
+[`keivitsa_sample_table`](@ref). The dataset root is `root` in the file
+(relative to the file's directory). Otherwise Cloncurry uses `CLONCURRY_ROOT`
+or the usual Desktop dump, and Keivitsa uses `KEIVITSA_ROOT`.
 
-Covariates are only those named in `covariates.use`. pXRF, drillhole
-lithology, and `sample_distance` are rejected here.
+Each source accepts one CRS (`EPSG:28354` or `EPSG:2393`). Covariates are
+only those named in `covariates.use`. pXRF, drillhole lithology, and
+`sample_distance` are rejected here.
 """
 function load_site(path::AbstractString)
     isfile(path) || throw(ArgumentError("load_site: no such file: $path"))
     cfg = TOML.parsefile(String(path))
     source = String(get(cfg, "source", ""))
-    source == "cloncurry" || throw(ArgumentError(
+    haskey(_SITE_CRS, source) || throw(ArgumentError(
         "load_site: unsupported source $(repr(source))"))
     crs = String(get(cfg, "crs", ""))
-    crs == "EPSG:28354" || throw(ArgumentError(
-        "load_site: expected crs \"EPSG:28354\", got $(repr(crs))"))
+    expected = _SITE_CRS[source]
+    crs == expected || throw(ArgumentError(
+        "load_site: source $(repr(source)) expects crs $(repr(expected)), got $(repr(crs))"))
     root = _site_root(cfg, path)
     # Reject a covariate list before touching the assay files.
     covs = _site_covariates(cfg, root)
-    table = cloncurry_sample_table(root, cfg)
+    table = if source == "cloncurry"
+        cloncurry_sample_table(root, cfg)
+    else
+        loaded, _ = keivitsa_sample_table(root, cfg)
+        loaded
+    end
     return table, covs, cfg
 end
 
@@ -34,6 +47,13 @@ function _site_root(cfg, toml_path::AbstractString)
     if haskey(cfg, "root") && !isempty(strip(String(cfg["root"])))
         r = String(cfg["root"])
         return isabspath(r) ? r : normpath(joinpath(dirname(toml_path), r))
+    end
+    source = String(get(cfg, "source", ""))
+    if source == "keivitsa"
+        env = get(ENV, "KEIVITSA_ROOT", "")
+        isempty(env) && throw(ArgumentError(
+            "load_site: set root in the site file or KEIVITSA_ROOT"))
+        return env
     end
     env = get(ENV, "CLONCURRY_ROOT", "")
     if !isempty(env)
@@ -134,10 +154,31 @@ function _site_covariates(cfg, root::AbstractString)
                 "load_site: missing covariates.surface_geology.file"))
             path = _resolve_file(root, surf_cfg["file"])
             push!(covs, SurfaceGeology(path))
+        elseif name == "depth_below_surface"
+            String(get(cfg, "source", "")) == "keivitsa" || throw(ArgumentError(
+                "load_site: depth_below_surface uses Keivitsa collar elevations " *
+                "(finite Z other than 0)"))
+            below = _cfg_table(block, "depth_below_surface")
+            d0 = _required_number(below, "d0",
+                                  "covariates.depth_below_surface.d0 (half the reference cell thickness)")
+            east, north, elev = _surface_collars(root, cfg)
+            has_mean = haskey(below, "log_mean")
+            has_std = haskey(below, "log_std")
+            if has_mean || has_std
+                (has_mean && has_std) || throw(ArgumentError(
+                    "load_site: covariates.depth_below_surface.log_mean and log_std must be set together"))
+                push!(covs, DepthBelowSurface(east, north, elev, d0;
+                                              log_mean = Float64(below["log_mean"]),
+                                              log_std = Float64(below["log_std"])))
+            else
+                push!(covs, DepthBelowSurface(east, north, elev, d0;
+                                              z_min = zlo, z_max = zhi))
+            end
         else
             throw(ArgumentError(
                 "load_site: unknown covariate $(repr(name)). " *
-                "Known: coordinates, depth, structure_distance, surface_geology"))
+                "Known: coordinates, depth, depth_below_surface, " *
+                "structure_distance, surface_geology"))
         end
     end
     return covs

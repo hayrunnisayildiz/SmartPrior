@@ -65,6 +65,14 @@ end
 `z_datum` by the skin depth of a `rho_ref` half-space at `period_max` (a
 geometric scale, not an MT input).
 
+Warning: `d = z - z_datum` is height above `z_datum`, not depth below a
+surface. `z` is elevation, positive up, and `z_datum` is the bottom of the
+box. `log_depth` therefore increases upward. A surface datum makes
+`z - z_surface` negative underground, and `max(d, d0)` clamps that to `d0`.
+[`depth_below_top`](@ref) has the same orientation (`cz - z[1]`). Neither
+formula is changed, so existing Cloncurry results stay reproducible. Depth
+positive downward from a surface is [`DepthBelowSurface`](@ref).
+
 `log_depth` is `log10(max(d, d0) / d0)` shifted by `log_mean` and `log_std`.
 Those two numbers are fixed when the covariate is built and are not
 recomputed from the points passed to [`evaluate`](@ref).
@@ -150,6 +158,129 @@ function evaluate(c::DepthCovariate, xyz::AbstractMatrix{<:Real})
     end
     δ = _skin_depth(c.rho_ref, c.period_max)
     out[2, :] .= d ./ δ
+    return out
+end
+
+# Power 2. At a collar the weight is infinite, so the surface there is that
+# collar (the mean, when several collars share the point).
+const _SURFACE_IDW_POWER = 2.0
+
+function _idw_elevation(east::Vector{Float64}, north::Vector{Float64},
+                        elevation::Vector{Float64}, x::Float64, y::Float64)
+    num = 0.0
+    den = 0.0
+    n_hit = 0
+    hit = 0.0
+    p = _SURFACE_IDW_POWER
+    @inbounds for i in eachindex(east)
+        d = hypot(x - east[i], y - north[i])
+        if d == 0
+            n_hit += 1
+            hit += elevation[i]
+            continue
+        end
+        w = inv(d^p)
+        num += w * elevation[i]
+        den += w
+    end
+    n_hit == 0 || return hit / n_hit
+    return num / den
+end
+
+"""
+    DepthBelowSurface(east, north, elevation, d0; log_mean, log_std)
+    DepthBelowSurface(east, north, elevation, d0; z_min, z_max)
+
+`log_depth` for depth positive downward from a surface:
+`d = z_surface(x, y) - z`, then `log10(max(d, d0) / d0)`, shifted by
+`log_mean` and `log_std`.
+
+`z_surface` is inverse-distance weighting (power 2) of the collar
+elevations passed in. Those stations are copied at construction and are
+not read again in [`evaluate`](@ref).
+
+The two moments are fixed at construction, the same rule as
+[`DepthCovariate`](@ref). Pass `log_mean` and `log_std`, or a vertical box
+`[z_min, z_max]`. The box uses that covariate's cell-centre population
+(nominal thickness `2 * d0`). They are not recomputed from the points
+passed to [`evaluate`](@ref).
+"""
+struct DepthBelowSurface <: Covariate
+    east::Vector{Float64}
+    north::Vector{Float64}
+    elevation::Vector{Float64}
+    d0::Float64
+    log_mean::Float64
+    log_std::Float64
+
+    function DepthBelowSurface(east::AbstractVector{<:Real},
+                               north::AbstractVector{<:Real},
+                               elevation::AbstractVector{<:Real},
+                               d0::Real, log_mean::Real, log_std::Real)
+        n = length(east)
+        (length(north) == n && length(elevation) == n) || throw(ArgumentError(
+            "DepthBelowSurface: east, north and elevation must have equal length"))
+        n > 0 || throw(ArgumentError(
+            "DepthBelowSurface: need at least one collar elevation"))
+        d0 > 0 || throw(ArgumentError("DepthBelowSurface: d0 must be positive"))
+        isfinite(log_mean) || throw(ArgumentError(
+            "DepthBelowSurface: log_mean must be finite"))
+        (isfinite(log_std) && log_std >= 0) || throw(ArgumentError(
+            "DepthBelowSurface: log_std must be finite and ≥ 0"))
+        ex = Vector{Float64}(undef, n)
+        ny = Vector{Float64}(undef, n)
+        ez = Vector{Float64}(undef, n)
+        for i in 1:n
+            (isfinite(east[i]) && isfinite(north[i]) && isfinite(elevation[i])) ||
+                throw(ArgumentError(
+                    "DepthBelowSurface: collar coordinates must be finite"))
+            ex[i] = Float64(east[i])
+            ny[i] = Float64(north[i])
+            ez[i] = Float64(elevation[i])
+        end
+        return new(ex, ny, ez, Float64(d0), Float64(log_mean), Float64(log_std))
+    end
+end
+
+function DepthBelowSurface(east::AbstractVector{<:Real},
+                           north::AbstractVector{<:Real},
+                           elevation::AbstractVector{<:Real},
+                           d0::Real;
+                           z_min::Union{Nothing,Real} = nothing,
+                           z_max::Union{Nothing,Real} = nothing,
+                           log_mean::Union{Nothing,Real} = nothing,
+                           log_std::Union{Nothing,Real} = nothing)
+    if log_mean !== nothing || log_std !== nothing
+        (log_mean !== nothing && log_std !== nothing) || throw(ArgumentError(
+            "DepthBelowSurface: log_mean and log_std must be set together"))
+        (z_min === nothing && z_max === nothing) || throw(ArgumentError(
+            "DepthBelowSurface: pass log_mean and log_std, or z_min and z_max, not both"))
+        return DepthBelowSurface(east, north, elevation, d0, log_mean, log_std)
+    end
+    (z_min !== nothing && z_max !== nothing) || throw(ArgumentError(
+        "DepthBelowSurface: pass log_mean and log_std, or z_min and z_max"))
+    μ, σ = _box_log_depth_moments(z_min, z_max, d0)
+    return DepthBelowSurface(east, north, elevation, d0, μ, σ)
+end
+
+channel_names(::DepthBelowSurface) = ["log_depth"]
+
+function evaluate(c::DepthBelowSurface, xyz::AbstractMatrix{<:Real})
+    pts = _xyz64(xyz)
+    n = size(pts, 2)
+    out = Matrix{Float64}(undef, 1, n)
+    n == 0 && return out
+    raw = Vector{Float64}(undef, n)
+    @inbounds for t in 1:n
+        zs = _idw_elevation(c.east, c.north, c.elevation, pts[1, t], pts[2, t])
+        d = zs - pts[3, t]
+        raw[t] = log10(max(d, c.d0) / c.d0)
+    end
+    if c.log_std > 0
+        out[1, :] .= (raw .- c.log_mean) ./ c.log_std
+    else
+        out[1, :] .= 0.0
+    end
     return out
 end
 

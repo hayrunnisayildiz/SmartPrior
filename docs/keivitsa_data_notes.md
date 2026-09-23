@@ -153,3 +153,13 @@ These were confirmed against the GTK package and are the rules for the adapter. 
 4. `POS_ACCUR = 99` means unknown accuracy, not an invalid collar. Keep the flag. Site bounds follow the main deposit drilling, so these 1992 holes (and the `Z = 0` holes) do not stretch the coordinate box. Report how many 511P samples the bounds remove.
 5. `CU_L = "!"` is left-censored, the same as `"<"`. Both sit at or below the documented 1 ppm Cu detection limit. Do not use Cloncurry's percentile rule for Keivitsa Cu: the site file will use `lod_policy = "fixed"` with `limit = 1.0` ppm. Cloncurry's percentile policy stays as it is.
 6. `PTR_*` and `DSR_*` are both core measurements from two campaigns (1987–93 and 1993–94), not downhole logs. Pool them into one density and one susceptibility. Keep the source label as a categorical field, never a covariate. Density `*_D` is kg/m³. Susceptibility `*_K` is 10⁻⁶ SI (GTK convention, inferred: not written in these files). `*_J` is remanence and is unused. `LUO_R` is the downhole resistivity sounding; ignore it for now.
+
+## Stage 4 validation
+
+Azimuth cross-hole check (Julia matches independent Python to three decimals): clockwise from grid north — corr **0.588**, mean |Δ| **0.525**; counter-clockwise — corr **0.464**, mean |Δ| **0.616**.
+
+PTR vs DSR campaign medians on the dominant lithologies show no systematic offset (e.g. METAPERIDOTIITTI density **3078** vs **3068** kg/m³, susceptibility **67910** vs **81940** (10⁻⁶ SI); OLIVIINIPYROKSENIITTI **3209** vs **3217**, **26170** vs **28430**). Pool PTR and DSR; keep `petro_source` categorical only.
+
+## Depth covariate
+
+The Cloncurry covariate named `depth` (`DepthCovariate`) is height above the bottom of the bounds box, not depth below the ground. It sets `d = z − z_datum` with `z_datum = z_min`, and `z` is elevation, positive up, so `log_depth` increases toward the top of the box. `depth_below_top` is the same orientation (`cz − z[1]`), a leftover of the z-down grid. Both formulas are unchanged so the Cloncurry feasibility results stay reproducible. Keivitsa uses `depth_below_surface` instead: `d = z_surface(x, y) − z`, positive downward. `z_surface` is the inverse-distance weighting of collar elevations with a finite, non-zero `Z`, frozen when the covariate is built. The network channel uses `log10(max(d, d0) / d0)` with `d0 = 25 m` (half of a 50 m reference thickness, inherited from the Cloncurry Ernest Henry site). On the kept 511P Cu samples, about 16% lie shallower than 25 m below the IDW surface, so their `log_depth` is clamped at the reference. Revisit `d0` (and possibly cell thickness) before a Keivitsa feasibility run; 25 m is not tuned to this deposit.

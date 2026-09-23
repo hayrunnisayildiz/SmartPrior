@@ -1,0 +1,45 @@
+name = "keivitsa"
+source = "keivitsa"
+crs = "EPSG:2393"
+vertical_datum = "N60 (assumed)"
+root = "."
+collar = "collar.txt"
+survey = "kalte.txt"
+assays = "511P.txt"
+petrophysics = "petro.txt"
+
+[bounds]
+x = [900.0, 1300.0]
+y = [1900.0, 2300.0]
+z = [50.0, 150.0]
+
+[properties.cu]
+kind = "continuous"
+transform = "log10"
+lod_policy = "fixed"
+lod = 1.0
+unit = "ppm"
+
+[properties.density]
+kind = "continuous"
+transform = "identity"
+unit = "kg/m3"
+
+[properties.susceptibility]
+kind = "continuous"
+transform = "log10"
+lod_policy = "min_positive"
+unit = "1e-6 SI"
+
+[properties.petro_source]
+kind = "categorical"
+transform = "identity"
+unit = ""
+
+[covariates]
+use = ["coordinates", "depth"]
+
+[covariates.depth]
+rho_ref = 100.0
+period_max = 1000.0
+d0 = 25.0

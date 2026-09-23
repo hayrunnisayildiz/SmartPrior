@@ -1,0 +1,68 @@
+# Keivitsa, GTK drillholes, KKJ zone 3 (EPSG:2393).
+# vertical_datum is metres above sea level, assumed N60. The N60 to N2000
+# shift is a few decimetres. Collar Z = 0 is a missing elevation and is
+# dropped by the adapter; it is not a height in this datum.
+name = "keivitsa"
+source = "keivitsa"
+crs = "EPSG:2393"
+vertical_datum = "N60 (assumed)"
+
+# Bounds are the desurveyed 511P interval-midpoint box of collars with a
+# surveyed elevation (Z ≠ 0) and POS_ACCUR other than 99, padded by the
+# cloncurry_deposit_bounds defaults (50 m in x and y, 25 m in z), then
+# rounded outward to the next metre. x is easting (KKJ_EAST), y is northing
+# (KKJ_NORTH), z is elevation up. POS_ACCUR 99 is the 1992 line about 3 km
+# from this box; those samples fall outside and are counted, not deleted as
+# invalid collars. The box does not drop a row by itself: the adapter does,
+# after censoring.
+
+[bounds]
+x = [3496570.0, 3500024.0]
+y = [7509950.0, 7513547.0]
+z = [-721.0, 335.0]
+
+# Continuous values stay in the original unit. transform is metadata for a
+# later training step. Cu "<" and "!" are upper bounds at the documented
+# 1 ppm detection limit, not a percentile of the measurements.
+# Susceptibility is 10⁻⁶ SI. Values ≤ 0 cannot take log10; they are upper
+# bounds at the smallest positive reading (lod_policy = "min_positive"),
+# the same rule as Cloncurry. The raw reading is written to the log.
+# petro_source is PTR or DSR, a categorical label for the campaign, never
+# a covariate.
+
+[properties.cu]
+kind = "continuous"
+transform = "log10"
+lod_policy = "fixed"
+lod = 1.0
+unit = "ppm"
+
+[properties.density]
+kind = "continuous"
+transform = "identity"
+unit = "kg/m3"
+
+[properties.susceptibility]
+kind = "continuous"
+transform = "log10"
+lod_policy = "min_positive"
+unit = "1e-6 SI"
+
+[properties.petro_source]
+kind = "categorical"
+transform = "identity"
+unit = ""
+
+# depth_below_surface is d = z_surface(x, y) − z, positive downward.
+# z_surface is inverse-distance weighting (power 2) of collar elevations
+# with a finite Z other than 0, frozen when the covariate is built.
+# The Cloncurry covariate "depth" is height above the bottom of the box
+# and is not used here. d0 = 25 m is half of a 50 m reference thickness,
+# the Ernest Henry site's value.
+# Geophysical covariates are a later task.
+
+[covariates]
+use = ["coordinates", "depth_below_surface"]
+
+[covariates.depth_below_surface]
+d0 = 25.0

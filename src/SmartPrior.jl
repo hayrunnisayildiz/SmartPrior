@@ -1,15 +1,27 @@
 """
     SmartPrior
 
-A Julia/Lux.jl neural field that predicts ore grade, density, magnetic
-susceptibility, and rock-specimen conductivity on every cell of a 3D block
-model from sparse geochemistry, drillhole lithology, sample coverage, and
-structural geology.
+Julia/Lux.jl neural field for 3D block models: predict grade, density,
+magnetic susceptibility, and (where configured) other rock properties with
+heteroscedastic uncertainty from **covariates that are known everywhere**
+in the model box — normalised coordinates, depth, distance to mapped
+structures, and surface geology — plus optional semi-synthetic fields for
+method tests.
 
-This is **not** a geophysical inversion package. Gravity, magnetics, and
-magnetotellurics are not inputs and are not solved for. The active case
-study is the Cloncurry district (Queensland; METAL package). Weights are
-not claimed to transfer to other deposits.
+**Not inputs (leakage):** pXRF geochemistry, drillhole lithology, and
+distance to the nearest sample. Those are training labels or confidence
+masks only; [`load_site`](@ref) rejects them as covariates.
+
+**Not a geophysical inversion:** gravity, magnetics, and MT are neither
+inputs nor outputs here.
+
+**Sites:** [`load_site`](@ref) loads a [`SampleTable`](@ref) from TOML under
+`sites/` — **Keivitsa** (GTK; primary) and **Cloncurry** (METAL; sparse-regime
+reference). Desurvey is in [`Desurvey.jl`](@ref); site readers are
+[`KeivitsaIO.jl`](@ref) and [`CloncurryIO.jl`](@ref). The older grid stack
+(`Grid.jl`, `Features.jl`, `examples/*_cloncurry_prior.jl`) is unchanged and
+still uses geochemistry / lithology / coverage as features; see the README
+legacy-path note.
 """
 module SmartPrior
 
@@ -37,6 +49,7 @@ include("Desurvey.jl")
 include("Covariates.jl")
 include("SyntheticFields.jl")
 include("CloncurryIO.jl")
+include("KeivitsaIO.jl")
 include("Sites.jl")
 include("PriorNet.jl")
 include("Losses.jl")
@@ -53,7 +66,7 @@ export cu_log10, aggregate_to_cells, map_points_to_cells
 export PropertySpec, SampleTable, nsamples, subset, observed_mask, training_mask
 export real_hole_mask
 export Covariate, evaluate, channel_names, evaluate_all
-export CoordinateCovariate, DepthCovariate, StructureDistance, SurfaceGeology
+export CoordinateCovariate, DepthCovariate, DepthBelowSurface, StructureDistance, SurfaceGeology
 export FeatureStack, PointSamples, LabelSamples
 export nchannels, build_features, feature_matrix
 export standardize, extrude, idw_to_grid, gaussian_smooth_xy, gradient_xy
@@ -100,6 +113,9 @@ export CLONCURRY_CU_DL_PPM, CLONCURRY_COND_FLOOR_S_M
 
 # desurvey
 export DesurveyPath, desurvey, positions
+
+# Keivitsa
+export keivitsa_sample_table, KeivitsaReport, KeivitsaExclusion, exclusion_summary
 
 # site files
 export load_site

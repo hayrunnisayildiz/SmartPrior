@@ -115,18 +115,20 @@ end
 
 """
     desurvey(collar_xyz, survey_depths, azimuths, dips;
-             angle_unit=:degree, dip_down_negative=false) -> DesurveyPath
+             angle_unit, dip_down_negative) -> DesurveyPath
 
 Minimum-curvature trajectory of one hole.
 
 `collar_xyz` is `(easting, northing, elevation)` in metres, elevation up.
 It is the point at along-hole depth 0. `survey_depths` are along-hole lengths
-from that collar, in metres, and must be non-decreasing. `azimuths` are
-clockwise from the positive northing axis. `dips` are inclinations from
-horizontal, in `angle_unit` (`:degree` or `:gon`, with 400 gon = 360°).
+from that collar, in metres, and must already be non-decreasing: a decrease
+is an error, and the rows are not sorted here. `azimuths` are clockwise from
+the positive northing axis. `dips` are inclinations from horizontal, in
+`angle_unit` (`:degree` or `:gon`, with 400 gon = 360°).
 
-If `dip_down_negative` is false, a positive dip points downward and +90° is
-vertical down. If true, a negative dip points downward and −90° is vertical down.
+`angle_unit` and `dip_down_negative` are required. If `dip_down_negative` is
+false, a positive dip points downward and +90° is vertical down. If true, a
+negative dip points downward and −90° is vertical down.
 
 Between two stations the hole is a circular arc, the unique curve of constant
 curvature that meets both directions. Where the directions are the same the
@@ -140,7 +142,7 @@ station the last direction is held.
 """
 function desurvey(collar_xyz, survey_depths::AbstractVector{<:Real},
                   azimuths::AbstractVector{<:Real}, dips::AbstractVector{<:Real};
-                  angle_unit::Symbol = :degree, dip_down_negative::Bool = false)
+                  angle_unit::Symbol, dip_down_negative::Bool)
     collar = _enz(collar_xyz)
     n = length(survey_depths)
     n > 0 || throw(ArgumentError("desurvey: survey is empty"))

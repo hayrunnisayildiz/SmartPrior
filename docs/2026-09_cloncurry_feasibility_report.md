@@ -246,3 +246,7 @@ Cloncurry is retained as a secondary site. Its placeholder hole IDs should be fi
 - Data: `Cloncurry_integrated_2026-09-17`.
 - Outputs: `tmp_feasibility/` (`summary.tsv`, `paired.tsv`, `kriging_params.tsv`, `predictions.tsv`, `run.log`).
 - Section 7 diagnostics were computed from these outputs outside the Julia package. They should be reimplemented in Julia (e.g. `examples/feasibility_diagnostics.jl`) before being cited in a paper.
+
+### Note (2026-09-23)
+
+The Cloncurry covariate named `depth` (`DepthCovariate`) was **height above the bottom of the bounds box**, not depth below ground (definition in `docs/keivitsa_data_notes.md`). The feasibility runs labelled `nn_xyz` used coordinates only; `nn_cov` added structure and surface geology, not that depth channel. Headline LOHO numbers in §5–§7 are unchanged.

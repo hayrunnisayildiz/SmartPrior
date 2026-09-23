@@ -1,0 +1,8 @@
+Tunnus ^ Syvyys ^ PTR_D ^ PTR_K ^ DSR_D ^ DSR_K
+char ^ real ^ real ^ real ^ real ^ real
+14 ^ 8 ^ 8 ^ 8 ^ 8 ^ 8
+0 ^ 2 ^ 2 ^ 2 ^ 2 ^ 2
+H1 ^ 5 ^ 3000 ^ 40000 ^  ^ 
+H1 ^ 6 ^  ^  ^  ^ 
+H2 ^ 5 ^  ^  ^ 3100 ^ 50000
+H2 ^ 8 ^  ^  ^ 2800 ^ -20
