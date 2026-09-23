@@ -31,6 +31,7 @@ using CodecZlib
 
 include("Grid.jl")
 include("Features.jl")
+include("Schema.jl")
 include("CloncurryIO.jl")
 include("PriorNet.jl")
 include("Losses.jl")
@@ -44,6 +45,7 @@ export containing_cell
 export cu_log10, aggregate_to_cells, map_points_to_cells
 
 # observations and features
+export PropertySpec, SampleTable, nsamples, subset, observed_mask
 export FeatureStack, PointSamples, LabelSamples
 export nchannels, build_features, feature_matrix
 export standardize, extrude, idw_to_grid, gaussian_smooth_xy, gradient_xy
