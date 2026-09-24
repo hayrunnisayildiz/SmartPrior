@@ -507,13 +507,15 @@ end
 
 #---------- neural field ----------
 
-function fourier_scales()
-    return exp.(range(log(FOURIER_SCALE_MIN), log(FOURIER_SCALE_MAX); length = FOURIER_BANDS))
+function fourier_scales(; scale_min::Real = FOURIER_SCALE_MIN,
+                        scale_max::Real = FOURIER_SCALE_MAX,
+                        bands::Int = FOURIER_BANDS)
+    return exp.(range(log(Float64(scale_min)), log(Float64(scale_max)); length = bands))
 end
 
 "Keep every channel. Append sin/cos of π·scale·x on the named xyz rows."
-function fourier_append(M::AbstractMatrix, rows::AbstractVector{Int})
-    scales = fourier_scales()
+function fourier_append(M::AbstractMatrix, rows::AbstractVector{Int};
+                        scales = fourier_scales())
     nrow, ncol = size(M)
     extra = 2 * length(rows) * length(scales)
     out = Matrix{Float64}(undef, nrow + extra, ncol)
@@ -533,11 +535,25 @@ function build_mlp(nin::Int)
     return Chain(Dense(nin => MLP_WIDTH, gelu), hidden..., Dense(MLP_WIDTH => 2))
 end
 
-function gauss_nll(model, ps, st, X, y)
+function gauss_nll(model, ps, st, X, y; beta::Real = 0.0)
     raw, _ = model(X, ps, st)
     μ = raw[1, :]
     σ = softplus.(raw[2, :]) .+ SIGMA_FLOOR
-    return mean(@. 0.5 * ((y - μ) / σ)^2 + log(σ))
+    nll = @. 0.5 * ((y - μ) / σ)^2 + log(σ)
+    β = Float64(beta)
+    if β == 0.0
+        return mean(nll)
+    end
+    # β-NLL (Seitzer et al.): weight by detached σ^(2β) so μ still sees a 1/σ² gradient.
+    w = Zygote.ignore_derivatives(σ .^ (2 * β))
+    return mean(w .* nll)
+end
+
+"Plain MSE on μ; the σ head is ignored."
+function mse_mu(model, ps, st, X, y)
+    raw, _ = model(X, ps, st)
+    μ = raw[1, :]
+    return mean(abs2, μ .- y)
 end
 
 function predict_mu_sigma(model, ps, st, X)
@@ -547,7 +563,61 @@ function predict_mu_sigma(model, ps, st, X)
     return μ, σ
 end
 
-function train_member(model, seed::Int, Xtr, ytr, Xva, yva, context::AbstractString)
+function _train_objective(loss::Symbol, beta::Real)
+    loss === :nll || loss === :mse || fail("train_member: unknown loss $loss (expected :nll or :mse)")
+    if loss === :mse
+        beta == 0.0 || fail("train_member: beta is only valid with loss=:nll")
+        return (model, ps, st, X, y) -> mse_mu(model, ps, st, X, y)
+    end
+    return (model, ps, st, X, y) -> gauss_nll(model, ps, st, X, y; beta = beta)
+end
+
+function _stop_metric(stop_on::Symbol, loss_fn, model, ps, st, Xva, yva)
+    if stop_on === :val_nll
+        return Float64(loss_fn(model, ps, st, Xva, yva))
+    elseif stop_on === :val_rmse
+        μ, _ = predict_mu_sigma(model, ps, st, Xva)
+        return sqrt(mean(abs2, μ .- yva))
+    elseif stop_on === :none
+        return NaN
+    else
+        fail("train_member: unknown stop_on $stop_on (expected :val_nll, :val_rmse, or :none)")
+    end
+end
+
+"""
+    train_member(...; loss=:nll, stop_on=:val_nll, beta=0.0, max_epochs=NN_EPOCHS,
+                 patience=NN_PATIENCE, log_every=0, history=nothing)
+
+Keyword defaults reproduce the previous fixed behaviour (Gaussian NLL, early
+stop on validation NLL). `loss=:mse` fits μ only. `stop_on=:none` runs a fixed
+number of full-batch steps. `beta>0` applies β-NLL with detached σ^(2β).
+When `log_every>0` and `history` is a Vector, each logged step pushes a NamedTuple
+`(step, train_loss, val_loss, train_rmse, val_rmse, mean_sigma)`. After training,
+best- and final-step snapshots are appended if those steps were not already logged.
+"""
+function _member_loss_snapshot(model, loss_fn, ps, st, Xtr, ytr, Xva, yva, step::Int)
+    μtr, σtr = predict_mu_sigma(model, ps, st, Xtr)
+    μva, _ = predict_mu_sigma(model, ps, st, Xva)
+    return (
+        step = step,
+        train_loss = Float64(loss_fn(model, ps, st, Xtr, ytr)),
+        val_loss = Float64(loss_fn(model, ps, st, Xva, yva)),
+        train_rmse = sqrt(mean(abs2, μtr .- ytr)),
+        val_rmse = sqrt(mean(abs2, μva .- yva)),
+        mean_sigma = mean(σtr),
+    )
+end
+
+function train_member(model, seed::Int, Xtr, ytr, Xva, yva, context::AbstractString;
+                      loss::Symbol = :nll,
+                      stop_on::Symbol = :val_nll,
+                      beta::Real = 0.0,
+                      max_epochs::Int = NN_EPOCHS,
+                      patience::Int = NN_PATIENCE,
+                      log_every::Int = 0,
+                      history = nothing)
+    loss_fn = _train_objective(loss, beta)
     ps, st = Lux.setup(Xoshiro(seed), model)
     ps = Lux.f64(ps)
     opt_state = Optimisers.setup(AdamW(NN_LR, (0.9, 0.999), NN_WEIGHT_DECAY), ps)
@@ -556,14 +626,23 @@ function train_member(model, seed::Int, Xtr, ytr, Xva, yva, context::AbstractStr
     best_epoch = 0
     wait = 0
     last_epoch = 0
-    for epoch in 1:NN_EPOCHS
+    early_stop = stop_on !== :none
+    for epoch in 1:max_epochs
         last_epoch = epoch
-        loss, grads = Zygote.withgradient(p -> gauss_nll(model, p, st, Xtr, ytr), ps)
-        isfinite(loss) || fail("$context seed $seed: training loss is not finite at epoch $epoch")
+        loss_val, grads = Zygote.withgradient(p -> loss_fn(model, p, st, Xtr, ytr), ps)
+        isfinite(loss_val) || fail("$context seed $seed: training loss is not finite at epoch $epoch")
         grads[1] === nothing && fail("$context seed $seed: missing gradient at epoch $epoch")
         opt_state, ps = Optimisers.update!(opt_state, ps, grads[1])
-        v = gauss_nll(model, ps, st, Xva, yva)
-        isfinite(v) || fail("$context seed $seed: validation loss is not finite at epoch $epoch")
+
+        if log_every > 0 && history !== nothing && (epoch % log_every == 0 || epoch == max_epochs)
+            push!(history, _member_loss_snapshot(model, loss_fn, ps, st, Xtr, ytr, Xva, yva, epoch))
+        end
+
+        if !early_stop
+            continue
+        end
+        v = _stop_metric(stop_on, loss_fn, model, ps, st, Xva, yva)
+        isfinite(v) || fail("$context seed $seed: validation metric is not finite at epoch $epoch")
         if v < best_val
             best_val = Float64(v)
             best_epoch = epoch
@@ -571,8 +650,21 @@ function train_member(model, seed::Int, Xtr, ytr, Xva, yva, context::AbstractStr
             wait = 0
         else
             wait += 1
-            wait >= NN_PATIENCE && break
+            wait >= patience && break
         end
+    end
+    if !early_stop
+        best_ps = deepcopy(ps)
+        best_epoch = last_epoch
+        best_val = Float64(loss_fn(model, ps, st, Xtr, ytr))
+    end
+    if log_every > 0 && history !== nothing
+        logged = Set(h.step for h in history)
+        best_epoch ∉ logged &&
+            push!(history, _member_loss_snapshot(model, loss_fn, best_ps, st, Xtr, ytr, Xva, yva, best_epoch))
+        last_epoch ∉ logged &&
+            push!(history, _member_loss_snapshot(model, loss_fn, ps, st, Xtr, ytr, Xva, yva, last_epoch))
+        sort!(history, by = h -> h.step)
     end
     return best_ps, st, best_epoch, last_epoch, best_val
 end
@@ -676,7 +768,10 @@ function rows_for(deposit, target, method, table, ids, rows, obs, cens, pred, sd
     return out
 end
 
-function finite_features(covs, table)
+function finite_features(covs, table;
+                         fourier_scale_min::Real = FOURIER_SCALE_MIN,
+                         fourier_scale_max::Real = FOURIER_SCALE_MAX,
+                         fourier_bands::Int = FOURIER_BANDS)
     mask = training_mask(table)
     idx = findall(mask)
     xyz = Matrix{Float64}(undef, 3, length(idx))
@@ -695,8 +790,10 @@ function finite_features(covs, table)
     any(c -> c isa CoordinateCovariate, covs) || fail("site has no CoordinateCovariate")
     any(c -> c isa DepthCovariate || c isa DepthBelowSurface, covs) ||
         fail("site has no depth covariate (depth or depth_below_surface)")
-    Xcov = fourier_append(M, xyz_rows)
-    Xxyz = fourier_append(M[xyz_rows, :], [1, 2, 3])
+    scales = fourier_scales(; scale_min = fourier_scale_min, scale_max = fourier_scale_max,
+                            bands = fourier_bands)
+    Xcov = fourier_append(M, xyz_rows; scales = scales)
+    Xxyz = fourier_append(M[xyz_rows, :], [1, 2, 3]; scales = scales)
     col_of = Dict{Int,Int}(i => k for (k, i) in enumerate(idx))
     return Xxyz, Xcov, col_of, names
 end
