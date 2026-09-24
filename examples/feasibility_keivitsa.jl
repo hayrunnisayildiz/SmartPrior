@@ -1,16 +1,30 @@
-# Keivitsa Cu feasibility: all kept 511P holes, 10-fold hole-grouped CV.
-# Methods: mean, kriging, nn_xyz (E2), nn_cov (E2). Density / susceptibility deferred.
+# Keivitsa feasibility: 10-fold hole-grouped CV for one target property.
+# Methods: mean, kriging, nn_xyz (E2), nn_cov (E2).
 #
 # E2 = Gaussian NLL training, early stop on validation RMSE of μ (see docs/keivitsa_data_notes.md).
 #
+# Target: SMARTPRIOR_TARGET = cu (default) | density | susceptibility.
+# The Cu run is unchanged: same work directory, same bootstrap tags, same tables.
+#
 # Run:  julia --project=. examples/feasibility_keivitsa.jl
-# Out:  tmp_feasibility_keivitsa/  (gitignored)
+#       SMARTPRIOR_TARGET=density julia --project=. examples/feasibility_keivitsa.jl
+# Out:  tmp_feasibility_keivitsa/            (cu, gitignored)
+#       tmp_feasibility_keivitsa_<target>/   (other targets, gitignored)
 
 const ROOT = dirname(@__DIR__)
+
+const ALLOWED_TARGETS = (:cu, :density, :susceptibility)
+const TARGET = let t = Symbol(lowercase(strip(get(ENV, "SMARTPRIOR_TARGET", "cu"))))
+    t in ALLOWED_TARGETS || error(
+        "SMARTPRIOR_TARGET must be one of $(join(ALLOWED_TARGETS, ", ")), got $t")
+    t
+end
+
 # Honor SMARTPRIOR_WORK when set (relative paths are from the repo root).
-# The default stays tmp_feasibility_keivitsa. Training settings are unchanged.
+# Default: tmp_feasibility_keivitsa for cu, tmp_feasibility_keivitsa_<target> otherwise.
 if !haskey(ENV, "SMARTPRIOR_WORK") || isempty(ENV["SMARTPRIOR_WORK"])
-    ENV["SMARTPRIOR_WORK"] = joinpath(ROOT, "tmp_feasibility_keivitsa")
+    ENV["SMARTPRIOR_WORK"] = joinpath(ROOT,
+        TARGET === :cu ? "tmp_feasibility_keivitsa" : "tmp_feasibility_keivitsa_$(TARGET)")
 elseif !isabspath(ENV["SMARTPRIOR_WORK"])
     ENV["SMARTPRIOR_WORK"] = joinpath(ROOT, ENV["SMARTPRIOR_WORK"])
 end
@@ -18,11 +32,11 @@ include(joinpath(@__DIR__, "feasibility_loho.jl"))
 
 const SITE_PATH = joinpath(ROOT, "sites", "keivitsa.toml")
 const DEPOSIT = "keivitsa"
-const TARGET = :cu
 
 const N_FOLDS = 10
 const KFOLD_SEED = 2026
-const EXPECTED_CU_HOLES = 261
+# Hole count checked against the frozen Cu run. Other targets have no frozen count yet.
+const EXPECTED_HOLES = Dict(:cu => 261)
 
 const NN_TRAIN_KW = (loss = :nll, stop_on = :val_rmse)
 const LOSS_LOG_EVERY = 50
@@ -336,7 +350,7 @@ function write_summaries(preds::Vector{Pred}, folds::Vector{KFoldResult})
                 want_cov = method in UNCERTAIN
                 met = pooled_metrics([r.obs for r in rows], [r.pred for r in rows],
                                      [r.sd for r in rows], want_cov && !isempty(rows))
-                tag = BOOT_SEED_TAG * "|cu|$(method)|$(subset)|skill"
+                tag = BOOT_SEED_TAG * "|$(TARGET)|$(method)|$(subset)|skill"
                 sk, lo, hi = bootstrap_skill_ci(rows, mu_by, tag)
                 cov = want_cov ? tsv_num(met.coverage) : ""
                 println(io, join((
@@ -357,7 +371,7 @@ function write_summaries(preds::Vector{Pred}, folds::Vector{KFoldResult})
                 h_ok, sk_ok = hole_skill(rows_ok, mu_by)
                 h_nn == h_ok || fail("paired holes differ for $nn $subset")
                 diffs = [sk_nn[h] - sk_ok[h] for h in h_nn]
-                tag = BOOT_SEED_TAG * "|cu|$(nn)|$(subset)|paired_skill"
+                tag = BOOT_SEED_TAG * "|$(TARGET)|$(nn)|$(subset)|paired_skill"
                 μ, lo, hi = bootstrap_mean_ci(diffs, tag)
                 n_win = count(>(0), diffs)
                 println(io, join((
@@ -375,7 +389,7 @@ function write_summaries(preds::Vector{Pred}, folds::Vector{KFoldResult})
             for subset in ("all", "uncensored")
                 rows = select_preds(preds, nn, subset)
                 rows_k = select_preds(preds, "kriging", subset)
-                tag = BOOT_SEED_TAG * "|cu|$(nn)|$(subset)|skill"
+                tag = BOOT_SEED_TAG * "|$(TARGET)|$(nn)|$(subset)|skill"
                 sk, lo, _ = bootstrap_skill_ci(rows, mu_by, tag)
                 sk_k = pooled_skill_from_rows(rows_k, mu_by)
                 p1 = sk >= SKILL_MIN
@@ -436,7 +450,7 @@ end
 function main_keivitsa_locked()
     LOG[] = open(joinpath(WORK, "run.log"), "w")
     t0 = time()
-    logmsg("Keivitsa Cu feasibility: $N_FOLDS-fold hole-grouped CV")
+    logmsg("Keivitsa $(TARGET) feasibility: $N_FOLDS-fold hole-grouped CV")
     logmsg("skill = 1 - RMSE/RMSE_mean (pooled test; mean from fold training set)")
     logmsg("NN E2: loss=:nll stop_on=:val_rmse seeds=$(NN_SEEDS)")
     logmsg("NN loss curves every $(LOSS_LOG_EVERY) steps → loss_curves.tsv")
@@ -455,9 +469,12 @@ function main_keivitsa_locked()
     eligible = findall(
         training_mask(table) .& real_hole_mask(table) .& observed_mask(table, TARGET))
     all_holes = sort!(unique(table.hole[eligible]))
-    length(all_holes) == EXPECTED_CU_HOLES ||
-        logmsg("WARNING: expected $EXPECTED_CU_HOLES Cu holes, got $(length(all_holes))")
-    logmsg("cu: $(length(eligible)) samples on $(length(all_holes)) holes")
+    if haskey(EXPECTED_HOLES, TARGET)
+        want = EXPECTED_HOLES[TARGET]
+        length(all_holes) == want ||
+            logmsg("WARNING: expected $want $(TARGET) holes, got $(length(all_holes))")
+    end
+    logmsg("$(TARGET): $(length(eligible)) samples on $(length(all_holes)) holes")
 
     fold_holes = hole_kfold_assignments(all_holes, N_FOLDS, KFOLD_SEED)
     write_fold_split(joinpath(WORK, "fold_split.tsv"), fold_holes)
