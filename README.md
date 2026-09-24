@@ -1,197 +1,80 @@
 # SmartPrior
 
-A Julia / Lux.jl neural-field method that predicts rock properties — Cu grade, density, magnetic susceptibility — at any 3D location from sparse drillhole samples, together with a per-location uncertainty. A block model is obtained by evaluating the field at block locations.
+A Julia / Lux.jl neural field that predicts a rock property, and its uncertainty, at any 3D point from sparse drillholes. The primary test is Keivitsa Cu; Cloncurry is the sparse-spacing reference.
 
-The method is site-agnostic: a site enters only through a data adapter and a TOML config. **Primary site:** Keivitsa (GTK). **Secondary:** Cloncurry district (METAL; sparse-regime reference). Gravity, magnetics, and MT are not inputs.
+![Keivitsa Cu uncertainty: kriging (v1) is tight almost everywhere; the neural field is larger and structured](docs/figures/3d_sigma.png)
 
-The MT-era package (SmartPriorMT) is archived as git tag `v0-mt-archive`.
+*Predicted σ for log10 Cu. Kriging (v1) stays near 0.15–0.2; the neural field is larger near isolated holes and the surface.*
 
-## Status
+## Key results
 
-| | |
-|---|---|
-| Primary site | **Keivitsa** (GTK; **261** kept Cu holes at ~48 m median collar spacing) |
-| Phase 1 data layer | **Done** — `SampleTable`, minimum-curvature desurvey, `load_site` for Cloncurry and Keivitsa |
-| Keivitsa pilot | **30 holes, 3-fold** hole-grouped CV + pipeline checks (`examples/feasibility_keivitsa_pilot.jl`). Check **A** passed (nn_xyz train skill); check **B** failed (semi-synthetic Cu — fix pipeline before the full run). |
-| Next milestone | **10-fold** hole-grouped Keivitsa feasibility (all kept Cu holes), after check B passes |
-| Real-data feasibility (Cloncurry, 4 deposits) | Done. No method — kriging, IDW or the neural field — beats a constant mean on held-out drillholes. Holes are 100–370 m apart, 4–11 per deposit. See [`docs/2026-09_cloncurry_feasibility_report.md`](docs/2026-09_cloncurry_feasibility_report.md). |
-| Semi-synthetic benchmark | In progress. Known 3D fields sampled at Cloncurry's real sample locations, to measure when prediction becomes possible. |
-| Multi-output heads, censored likelihood, block averaging | Planned (Phase 2). |
+On Keivitsa Cu (261 holes, 10-fold hole-grouped CV) the neural field is non-inferior to kriging (v1): skill 0.151 vs 0.106; the pooled difference is not significant.
 
-### Legacy path (unchanged on purpose)
+Its uncertainty is calibrated: 90 % intervals cover 0.74–0.92 per fold vs 0.43–0.54 for kriging (v1).
 
-`Grid.jl` / `Features.jl` / `PriorNet.jl` and `examples/train_cloncurry_prior.jl`,
-`examples/holdout_cloncurry_prior.jl` still build **geochemistry, lithology, and
-sample-distance channels from every specimen**, including held-out holes (only
-labels were hidden). Do not cite those RMSE tables as leak-free hold-out. Phase 1
-evaluation uses `Covariates.jl`, site tables, and `examples/feasibility_loho.jl`.
+At Cloncurry's sparse spacing no method beats the mean.
 
-The same scripts are documented under **Legacy path** in [Repository layout](#repository-layout) below.
+![Skill with 95 % confidence intervals](docs/figures/skill_ci.png)
 
-## Architecture
+*Pooled skill on all 15,859 Keivitsa Cu samples. The neural-field interval sits above 0 and overlaps kriging (v1).*
 
-```
- INPUTS                         NETWORK                               OUTPUTS
- ──────                         ───────                               ───────
- query point (x, y, z)  ──►  Fourier encoding of xyz  ──┐
-                                                         ├──►  MLP  ──►  μ(x)  predicted value
- covariates at (x, y, z) ─────────────────────────────── ┘              σ(x)  uncertainty
- (depth, structure distance,                                  × 5-member ensemble
-  surface geology)
+## Pipeline
+
+```mermaid
+flowchart LR
+  gtk["GTK raw tables"] --> desurvey["desurvey"]
+  desurvey --> adapter["adapter"]
+  adapter --> samples["SampleTable"]
+  samples --> cov["covariates"]
+  cov --> cv["hole-grouped CV"]
 ```
 
-### Inputs
+![Network: Fourier xyz, MLP, μ and σ](docs/figures/network_architecture.png)
 
-The network only sees quantities that are **known at every location**, so the same function can be evaluated at a drillhole sample or at an arbitrary block.
+*Five-member ensemble. Coordinates are Fourier-encoded; other covariates are appended. The head emits μ and σ.*
 
-| Input | What it is |
-|---|---|
-| Coordinates | x, y, z normalised to the site box |
-| Depth | log depth below the surface (`depth_below_surface` on Keivitsa; Cloncurry deposits use box-height `depth` in legacy runs) |
-| Structure distance | distance to mapped faults and contacts |
-| Surface geology | one-hot surface rock class at (x, y) |
+## Quick start
 
-Deliberately **not** inputs:
+Set `KEIVITSA_ROOT` to the unpacked GTK `source/gtk` tree. Data stay outside the repo.
 
-- **pXRF geochemistry and drillhole lithology** exist only at samples. At a held-out hole they would leak that hole's own measurements, and at an undrilled block they do not exist. They are candidates for *outputs*.
-- **Sample distance** is used only as a confidence mask for display.
+```bash
+julia --project=. -e 'using Pkg; Pkg.instantiate()'
+julia --project=. -e 'using Pkg; Pkg.test()'
 
-Every covariate is a pure, point-wise function. Its normalisation statistics are fixed when the covariate is built, so `evaluate(c, xyz)` does not depend on which other points are queried.
-
-### Network
-
-| Stage | Setting |
-|---|---|
-| Encoding | xyz plus sin/cos(π·s·x) for 16 log-spaced scales s ∈ [1, 16]; other covariates appended unencoded |
-| Body | MLP, 3 hidden layers × 64 units, GELU |
-| Head | linear → (μ, σ), σ = softplus + 10⁻³ |
-| Ensemble | 5 members with different seeds; predictive variance = mean σ² + variance of member means |
-
-Currently one network is trained per property. A shared network with one head per property is planned.
-
-### Training
-
-- **Loss:** heteroscedastic Gaussian negative log-likelihood on sample points. There is no grid during training.
-- **Optimiser:** AdamW (lr 10⁻³, weight decay 10⁻⁴), full batch.
-- **Early stopping:** on held-out *training holes* (20 %); a test hole never influences training, standardisation or stopping.
-- **Target scaling:** standardised with the training fold's mean and SD.
-- **Censored values** (below detection limit) are carried in the data with a flag. They are currently set to the limit; a censored likelihood is planned.
-
-### Outputs
-
-| Property | Unit | Per location |
-|---|---|---|
-| Cu grade | log10 ppm | μ, σ |
-| Density | g/cm³ | μ, σ |
-| Magnetic susceptibility | log10 SI | μ, σ |
-
-Derived quantities (planned): exceedance probability P(Cu > cutoff), block averages over sub-block points, tonnage.
-
-## Evaluation
-
-Every result is compared under the same folds with:
-
-- **mean** — training mean;
-- **IDW** — inverse-distance weighting;
-- **ordinary kriging** — GeoStats.jl, variogram refitted per fold on training holes only.
-
-Cross-validation is **grouped by drillhole** (a hole is entirely train or test in a fold).
-
-| Site | CV scheme |
-|---|---|
-| Cloncurry feasibility | Leave-one-hole-out per deposit (`examples/feasibility_loho.jl`) |
-| Keivitsa | **K-fold by hole** — pilot: 30 holes, 3 folds; full run: all kept Cu holes, **10 folds** |
-
-**Skill** (Keivitsa pilot and full run): `1 − RMSE / RMSE_mean`, with RMSE pooled over all test samples in the evaluated folds and `RMSE_mean` computed against that fold’s **training** mean (not the test-set mean).
-
-Metrics also include RMSE, R², and coverage of the 90 % interval where uncertainty is reported.
-
-A method is considered useful only if it clearly beats the mean *and* is comparable to or better than kriging.
-
-## Data
-
-Data are not in this repository.
-
-**Keivitsa (GTK)** — set `KEIVITSA_ROOT` to the unpacked `database/keivitsa/source/gtk`
-tree (or `root` in `sites/keivitsa.toml`). Raw caret tables (`kalte.txt`, `511P.txt`,
-`petro.txt`, …) and shapefiles stay outside git. **GTK basic licence:** internal use
-and figures in scientific publications only; **do not commit or redistribute** GTK
-data or derived exports. Synthetic layout-only fixtures:
-`test/fixtures/keivitsa_tiny/`. Inspection output: `tmp_keivitsa_inspect/` (gitignored).
-
-**Cloncurry (METAL)** — `CLONCURRY_ROOT` (default
-`~/Desktop/datasets4HY/Cloncurry_integrated_2026-09-17`, CC BY 4.0, Austin et al. 2024):
-
-```
-├── derived/          # petrophysics_samples.csv, metal_all_fields.csv.gz
-└── geology/          # structures.geojson, surface_geology.geojson
+julia --project=. examples/diagnose_nn_keivitsa.jl
+julia --project=. examples/feasibility_keivitsa.jl
+julia --project=. examples/keivitsa_run2_checks.jl
+julia --project=. examples/keivitsa_blockmodel.jl
+julia --project=. examples/figures_data.jl
+julia --project=. examples/figures_training.jl
+julia --project=. examples/figures_results.jl
+julia --project=. examples/figures_3d.jl
 ```
 
-`mt/`, `gravity/`, and `magnetics/` are not opened. Fixtures: `test/fixtures/cloncurry_*`.
-
-Site files in `sites/` (`keivitsa.toml`, `ernest_henry.toml`, `cannington.toml`, `starra.toml`, `osborne.toml`) give each box, CRS, properties and covariates.
-
-Convention notes (no raw GTK rows): [`docs/keivitsa_data_notes.md`](docs/keivitsa_data_notes.md).
-
-Cloncurry detection-limit policy (district, before deposit filter): censoring limit = 1st percentile of positive values → 5.8 ppm Cu and 0.0356 S/m for conductivity. Keivitsa Cu uses a fixed 1 ppm limit in `sites/keivitsa.toml`.
+The feasibility script refuses a non-empty work directory and a leftover `.run.lock`, so two runs cannot share one output folder.
 
 ## Repository layout
 
 | Path | Role |
 |---|---|
 | `src/SmartPrior.jl` | module entry |
-| `src/{Schema,Sites,Covariates,Desurvey}.jl` | Phase 1 site schema, covariates, desurvey |
-| `src/{CloncurryIO,KeivitsaIO}.jl` | METAL / GTK → `SampleTable` |
-| `src/{Grid,Features,PriorNet,Losses,Train,Metrics}.jl` | legacy grid neural-field stack |
-| `src/SyntheticFields.jl` | seedable Gaussian fields (Experiment 1) |
-| `sites/{keivitsa,ernest_henry,starra,cannington,osborne}.toml` | site configuration |
-| `examples/keivitsa_inspect.jl` | Keivitsa counts, azimuth check, GLMakie traces |
-| `examples/feasibility_loho.jl` | leak-free Cloncurry LOHO feasibility |
-| `examples/feasibility_keivitsa_pilot.jl` | Keivitsa 30-hole / 3-fold pilot + checks A/B |
-| `examples/synthetic_exp1.jl` | semi-synthetic mean / kriging / nn_xyz benchmark |
-| `examples/train_cloncurry_prior.jl` | legacy full-data train |
-| `examples/holdout_cloncurry_prior.jl` | legacy drillhole-group hold-out |
-| `examples/export_cloncurry_blockmodel.jl` | VTK + Cu figure (legacy checkpoints) |
-| `examples/variogram_cloncurry.jl` | directional variogram |
-| `examples/kriging_cloncurry_petro.jl` | ordinary-kriging baseline |
-| `examples/calibration_plot_cloncurry.jl` | calibration figure (legacy checkpoints) |
-| `examples/kriging_env/` | isolated GeoStats.jl kriging env |
-| `docs/keivitsa_data_notes.md` | GTK conventions (statistics only) |
-| `docs/2026-09_cloncurry_feasibility_report.md` | Cloncurry LOHO report |
-| `tmp_*/` | gitignored run outputs |
+| `src/{Schema,Sites,Covariates,Desurvey}.jl` | site schema, covariates, desurvey |
+| `src/{CloncurryIO,KeivitsaIO}.jl` | adapters to `SampleTable` |
+| `src/{Grid,Features,PriorNet,Losses,Train,Metrics}.jl` | legacy grid stack |
+| `src/SyntheticFields.jl` | seedable Gaussian fields |
+| `sites/*.toml` | site boxes, CRS, properties |
+| `examples/diagnose_nn_keivitsa.jl` | synthetic stopping diagnosis |
+| `examples/feasibility_keivitsa.jl` | 10-fold Keivitsa Cu CV |
+| `examples/keivitsa_run2_checks.jl` | byte compare, coverage, variograms |
+| `examples/keivitsa_blockmodel.jl` | final block model |
+| `examples/figures_{data,training,results,3d}.jl` | report figures |
+| `examples/feasibility_loho.jl` | Cloncurry leave-one-hole-out |
+| `examples/feasibility_keivitsa_pilot.jl` | 30-hole pilot |
+| `docs/figures/` | figures cited below |
+| `docs/2026-09_keivitsa_technical_report.md` | Keivitsa report |
+| `docs/2026-09_cloncurry_feasibility_report.md` | Cloncurry report |
+| `docs/keivitsa_data_notes.md` | GTK conventions, statistics only |
 
-**Legacy path.** `src/{Grid,Features,PriorNet,Losses,Train,Metrics}.jl` and `examples/{train,holdout}_cloncurry_prior.jl` implement the earlier grid-based pipeline. It used test-hole pXRF as input, so its published numbers are not leak-free. It is kept only until Phase 2 replaces it, and should not be used for new results.
+Full write-up: [Keivitsa technical report](docs/2026-09_keivitsa_technical_report.md).
 
-## How to run
-
-```bash
-julia --project=. -e 'using Pkg; Pkg.instantiate()'
-julia --project=. -e 'using Pkg; Pkg.test()'
-
-# Keivitsa adapter checks (requires KEIVITSA_ROOT or sites/keivitsa.toml root)
-julia --project=. examples/keivitsa_inspect.jl
-
-# Keivitsa Cu pilot — 30 holes, 3-fold CV + pipeline checks (tmp_keivitsa_pilot/)
-julia --project=. examples/feasibility_keivitsa_pilot.jl
-
-# Real-data feasibility (writes tmp_feasibility/)
-julia --project=. examples/feasibility_loho.jl
-```
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `KEIVITSA_ROOT` | — | GTK `source/gtk` tree (required for Keivitsa) |
-| `CLONCURRY_ROOT` | `~/Desktop/datasets4HY/Cloncurry_integrated_2026-09-17` | METAL package root |
-| `SMARTPRIOR_WORK` | `tmp_feasibility` or script-specific | Output dir for feasibility / pilot runs |
-
-Legacy district train / hold-out / VTK export: `examples/train_cloncurry_prior.jl`, `examples/holdout_cloncurry_prior.jl`, `examples/export_cloncurry_blockmodel.jl` (see legacy-path note above).
-
-## Roadmap
-
-1. Semi-synthetic benchmark: hole geometry × correlation length (experiment 1), then multiple properties, lithology and censoring.
-2. Keivitsa **10-fold** feasibility (after pilot check B passes), then Phase 2: shared multi-output network, censored likelihood, block averaging.
-3. Visualisation: GLMakie block viewer showing μ, σ and exceedance probability, faded by distance to data; VTK export.
-
-## License
-
-MIT. See `LICENSE`. Keivitsa data: GTK basic licence (no redistribution). Cloncurry METAL: CC BY 4.0. Other METAL geophysical products keep their own attributions.
+GTK data are never committed (basic licence: internal use and publication figures only). The legacy scripts `examples/train_cloncurry_prior.jl` and `examples/holdout_cloncurry_prior.jl` fed held-out holes' own geochemistry into the network; do not cite those RMSE tables.

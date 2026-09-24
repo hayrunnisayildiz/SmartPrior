@@ -7,7 +7,13 @@
 # Out:  tmp_feasibility_keivitsa/  (gitignored)
 
 const ROOT = dirname(@__DIR__)
-ENV["SMARTPRIOR_WORK"] = joinpath(ROOT, "tmp_feasibility_keivitsa")
+# Honor SMARTPRIOR_WORK when set (relative paths are from the repo root).
+# The default stays tmp_feasibility_keivitsa. Training settings are unchanged.
+if !haskey(ENV, "SMARTPRIOR_WORK") || isempty(ENV["SMARTPRIOR_WORK"])
+    ENV["SMARTPRIOR_WORK"] = joinpath(ROOT, "tmp_feasibility_keivitsa")
+elseif !isabspath(ENV["SMARTPRIOR_WORK"])
+    ENV["SMARTPRIOR_WORK"] = joinpath(ROOT, ENV["SMARTPRIOR_WORK"])
+end
 include(joinpath(@__DIR__, "feasibility_loho.jl"))
 
 const SITE_PATH = joinpath(ROOT, "sites", "keivitsa.toml")
@@ -391,8 +397,43 @@ function write_summaries(preds::Vector{Pred}, folds::Vector{KFoldResult})
     return nothing
 end
 
-function main_keivitsa()
+function claim_work_dir()
+    lock_path = joinpath(WORK, ".run.lock")
+    if isfile(lock_path)
+        fail("refusing to start: lock file present at $lock_path")
+    end
+    if isdir(WORK)
+        names = readdir(WORK)
+        if !isempty(names)
+            fail("refusing to start: work directory exists and is non-empty ($WORK)")
+        end
+    end
     mkpath(WORK)
+    open(lock_path, "w") do io
+        println(io, getpid())
+    end
+    return lock_path
+end
+
+function release_work_lock(lock_path)
+    isfile(lock_path) && rm(lock_path)
+    return nothing
+end
+
+function main_keivitsa()
+    lock_path = claim_work_dir()
+    try
+        main_keivitsa_locked()
+    finally
+        release_work_lock(lock_path)
+        if isassigned(LOG) && isopen(LOG[])
+            close(LOG[])
+        end
+    end
+    return nothing
+end
+
+function main_keivitsa_locked()
     LOG[] = open(joinpath(WORK, "run.log"), "w")
     t0 = time()
     logmsg("Keivitsa Cu feasibility: $N_FOLDS-fold hole-grouped CV")
@@ -469,7 +510,6 @@ function main_keivitsa()
 
     elapsed = time() - t0
     logmsg(@sprintf("finished in %.1f s (%.2f h)", elapsed, elapsed / 3600))
-    close(LOG[])
     return nothing
 end
 
