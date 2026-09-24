@@ -20,7 +20,7 @@ using Random
 using Statistics
 
 const ROOT = dirname(@__DIR__)
-const WORK = joinpath(ROOT, "tmp_feasibility")
+const WORK = get(ENV, "SMARTPRIOR_WORK", joinpath(ROOT, "tmp_feasibility"))
 const TEMPLATE = joinpath(ROOT, "sites", "ernest_henry.toml")
 
 const DEPOSITS = (
@@ -692,8 +692,9 @@ function finite_features(covs, table)
         k === nothing && fail("covariate channels have no $n")
         push!(xyz_rows, k)
     end
-    any(c -> c isa DepthCovariate, covs) || fail("site has no DepthCovariate")
     any(c -> c isa CoordinateCovariate, covs) || fail("site has no CoordinateCovariate")
+    any(c -> c isa DepthCovariate || c isa DepthBelowSurface, covs) ||
+        fail("site has no depth covariate (depth or depth_below_surface)")
     Xcov = fourier_append(M, xyz_rows)
     Xxyz = fourier_append(M[xyz_rows, :], [1, 2, 3])
     col_of = Dict{Int,Int}(i => k for (k, i) in enumerate(idx))

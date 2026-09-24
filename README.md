@@ -137,6 +137,7 @@ Cloncurry detection-limit policy (district, before deposit filter): censoring li
 | `sites/{keivitsa,ernest_henry,starra,cannington,osborne}.toml` | site configuration |
 | `examples/keivitsa_inspect.jl` | Keivitsa counts, azimuth check, GLMakie traces |
 | `examples/feasibility_loho.jl` | leak-free Cloncurry LOHO feasibility |
+| `examples/feasibility_keivitsa_pilot.jl` | Keivitsa 30-hole / 3-fold pilot + checks A/B |
 | `examples/synthetic_exp1.jl` | semi-synthetic mean / kriging / nn_xyz benchmark |
 | `examples/train_cloncurry_prior.jl` | legacy full-data train |
 | `examples/holdout_cloncurry_prior.jl` | legacy drillhole-group hold-out |
@@ -158,6 +159,9 @@ julia --project=. -e 'using Pkg; Pkg.test()'
 
 # Keivitsa adapter checks (requires KEIVITSA_ROOT or sites/keivitsa.toml root)
 julia --project=. examples/keivitsa_inspect.jl
+
+# Keivitsa Cu pilot — 30 holes, 3-fold CV + pipeline checks (tmp_keivitsa_pilot/)
+julia --project=. examples/feasibility_keivitsa_pilot.jl
 
 # Real-data feasibility (writes tmp_feasibility/)
 julia --project=. examples/feasibility_loho.jl
