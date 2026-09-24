@@ -63,6 +63,7 @@ The feasibility script refuses a non-empty work directory and a leftover `.run.l
 | `src/{Grid,Features,PriorNet,Losses,Train,Metrics}.jl` | legacy grid stack |
 | `src/SyntheticFields.jl` | seedable Gaussian fields |
 | `sites/*.toml` | site boxes, CRS, properties |
+| `examples/keivitsa_inspect.jl` | data checks |
 | `examples/diagnose_nn_keivitsa.jl` | synthetic stopping diagnosis |
 | `examples/feasibility_keivitsa.jl` | 10-fold Keivitsa Cu CV |
 | `examples/keivitsa_run2_checks.jl` | byte compare, coverage, variograms |
@@ -77,4 +78,4 @@ The feasibility script refuses a non-empty work directory and a leftover `.run.l
 
 Full write-up: [Keivitsa technical report](docs/2026-09_keivitsa_technical_report.md).
 
-GTK data are never committed (basic licence: internal use and publication figures only). The legacy scripts `examples/train_cloncurry_prior.jl` and `examples/holdout_cloncurry_prior.jl` fed held-out holes' own geochemistry into the network; do not cite those RMSE tables.
+GTK data are never committed. Check the GTK licence terms before publishing figures derived from the data. The legacy scripts `examples/train_cloncurry_prior.jl` and `examples/holdout_cloncurry_prior.jl` fed held-out holes' own geochemistry into the network; do not cite those RMSE tables.

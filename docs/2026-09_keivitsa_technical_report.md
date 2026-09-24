@@ -14,17 +14,19 @@ At Cloncurry, where holes are hundreds of metres apart, no method beats the trai
 
 Cu is method 511P, transformed to log10 ppm, with a fixed 1 ppm censoring limit. Training uses only samples on real holes. Each fold holds out whole holes: a test hole never enters training, standardisation, variogram fitting, or early stopping.
 
+The GTK tables were desurveyed with minimum curvature. Of 16,004 Cu samples in 289 holes, 15,859 in 261 holes are kept (8 holes lack a collar elevation; 20 lie about 3 km outside the drilled area). Desurveyed hole lengths match the collar table exactly. Details: docs/keivitsa_data_notes.md.
+
 ![Collar map, depth, and grade](figures/data_overview.png)
 
-*261 kept Cu holes. Colour is log10 Cu; the map is the collar plan after desurvey.*
+*Plan view of the desurveyed Cu holes coloured by log10 Cu, and the log10 Cu distribution with the 1 ppm detection limit.*
 
 ![Azimuth check](figures/azimuth_check.png)
 
-*Survey azimuths cluster on the cardinal directions, consistent with grid-planned holes. Dip is inclination from horizontal, vertical at +90.*
+*Cross-hole agreement of log10 Cu for inclined, non-N–S holes (nearest sample from another hole within 20 m): clockwise azimuth gives correlation 0.588 and mean |Δ| 0.525; counterclockwise 0.464 and 0.616. An independent Python check gives the same values.*
 
 ## Method
 
-The same folds score four predictors: the training mean, kriging (v1), `nn_xyz` (coordinates and log depth), and `nn_cov` (those plus structure distance and surface geology). Skill is `1 − RMSE / RMSE_mean`, with RMSE pooled over test samples and the mean taken from that fold's training holes.
+The same folds score four predictors: the training mean, kriging (v1), `nn_xyz` (coordinates only: x, y, z with Fourier features), and `nn_cov` (coordinates plus `depth_below_surface`). Keivitsa has no structure distance or surface geology. Skill is `1 − RMSE / RMSE_mean`, with RMSE pooled over test samples and the mean taken from that fold's training holes.
 
 ![Network architecture](figures/network_architecture.png)
 
@@ -34,7 +36,7 @@ The same folds score four predictors: the training mean, kriging (v1), `nn_xyz` 
 
 ## Training diagnosis
 
-Stopping was chosen on a synthetic Cu field at the real hole locations, before any real-Cu number was looked at.
+Stopping was chosen on a synthetic Cu field at the real hole locations, before the real-Cu cross-validation was run (the 30-hole pilot's real-Cu skills had been seen).
 
 Stopping on validation NLL (E0) halted at a median of 39 steps (validation skill 0.205, synthetic test skill 0.258, against kriging test skill 0.331). The pre-set rule on that synthetic table picked E0. E2 — same NLL loss, stop on validation RMSE of μ — was frozen instead, as a recorded deviation: median best step 272, validation skill 0.519, synthetic test skill 0.411.
 
@@ -42,7 +44,7 @@ Stopping on validation NLL (E0) halted at a median of 39 steps (validation skill
 
 *Synthetic diagnosis only. E0 underfits μ. E2 is the frozen real-Cu setting.*
 
-On the real final model (`stop_on = :val_rmse`, five seeds) the best steps are 13, 16, 19, 21, and 19. Validation RMSE there is 0.847–0.886, and at step 50 it is 0.900–0.948. Longer training fits noise. The smoothness of the 3D field is that early stop, not an under-trained network.
+On the real final model (`stop_on = :val_rmse`, five seeds) the best steps are 13, 16, 19, 21, and 19. Validation RMSE there is 0.847–0.886, and at step 50 it is 0.900–0.948. Longer training fits noise. The smooth 3D field reflects what the data support: training longer only fits noise.
 
 ![Validation RMSE by seed](figures/val_rmse_curves.png)
 
@@ -74,7 +76,7 @@ The **per-hole paired mean** is the average, over 261 holes, of that hole's skil
 
 ## Uncertainty
 
-For a calibrated Gaussian, the median of σ / |error| is about 1.48. The neural field's median is 1.38; kriging (v1) is 0.58. Kriging (v1) reports intervals that are too narrow on more than half the samples.
+For a calibrated Gaussian, the median of σ / |error| is about 1.48. The neural field's median is 1.38; kriging (v1) is 0.58. Kriging (v1)'s 90 % intervals miss about half of the held-out samples.
 
 ![90 % coverage by fold](figures/coverage_per_fold.png)
 
@@ -106,13 +108,13 @@ The displayed block model keeps 80,761 cells inside 60 m of a sample, out of 2,9
 
 ## Kriging (v1) limitations
 
-The baseline is an anisotropic spherical variogram with one shared sill, refit on each fold's training holes. On fold 6 the vertical range is 972 m, which is the optimiser's upper bound (twice the last downhole bin centre). Eight of the ten folds sit on that same bound. Downhole bins are 33 m wide, so they cannot resolve a 2 m nugget. Horizontal and vertical ranges share one sill.
+The baseline is an anisotropic spherical variogram with one shared sill, refit on each fold's training holes. On fold 6 the vertical range is 972 m, which is the optimiser's upper bound (twice the last downhole bin centre). Eight of the ten folds sit on that same bound. Downhole bins are 33 m wide, so they cannot resolve a 2 m nugget.
 
 The comparison is therefore with kriging (v1). A variogram that can place a short-scale nugget and a free vertical range — kriging (v2) — is the next baseline, not a result claimed here.
 
 ![Fold 6 variogram](figures/variogram_fold6.png)
 
-*Experimental semivariance and the spherical fit. The downhole model is still climbing when it hits the 972 m cap.*
+*Within the 503 m lag window the downhole experimental semivariance levels off, while the fitted curve keeps rising because its vertical range is pinned at the 972 m upper bound.*
 
 ## Reproducibility
 
