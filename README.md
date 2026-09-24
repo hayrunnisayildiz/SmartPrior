@@ -10,9 +10,10 @@ The MT-era package (SmartPriorMT) is archived as git tag `v0-mt-archive`.
 
 | | |
 |---|---|
-| Primary site | **Keivitsa** (GTK; ~289 Cu holes, ~48 m median collar spacing) |
+| Primary site | **Keivitsa** (GTK; **261** kept Cu holes at ~48 m median collar spacing) |
 | Phase 1 data layer | **Done** — `SampleTable`, minimum-curvature desurvey, `load_site` for Cloncurry and Keivitsa |
-| Next milestone | **Feasibility experiment on Keivitsa** (same LOHO protocol as Cloncurry) |
+| Keivitsa pilot | **30 holes, 3-fold** hole-grouped CV + pipeline checks (`examples/feasibility_keivitsa_pilot.jl`). Check **A** passed (nn_xyz train skill); check **B** failed (semi-synthetic Cu — fix pipeline before the full run). |
+| Next milestone | **10-fold** hole-grouped Keivitsa feasibility (all kept Cu holes), after check B passes |
 | Real-data feasibility (Cloncurry, 4 deposits) | Done. No method — kriging, IDW or the neural field — beats a constant mean on held-out drillholes. Holes are 100–370 m apart, 4–11 per deposit. See [`docs/2026-09_cloncurry_feasibility_report.md`](docs/2026-09_cloncurry_feasibility_report.md). |
 | Semi-synthetic benchmark | In progress. Known 3D fields sampled at Cloncurry's real sample locations, to measure when prediction becomes possible. |
 | Multi-output heads, censored likelihood, block averaging | Planned (Phase 2). |
@@ -46,7 +47,7 @@ The network only sees quantities that are **known at every location**, so the sa
 | Input | What it is |
 |---|---|
 | Coordinates | x, y, z normalised to the site box |
-| Depth | log depth below the surface |
+| Depth | log depth below the surface (`depth_below_surface` on Keivitsa; Cloncurry deposits use box-height `depth` in legacy runs) |
 | Structure distance | distance to mapped faults and contacts |
 | Surface geology | one-hot surface rock class at (x, y) |
 
@@ -94,7 +95,16 @@ Every result is compared under the same folds with:
 - **IDW** — inverse-distance weighting;
 - **ordinary kriging** — GeoStats.jl, variogram refitted per fold on training holes only.
 
-Cross-validation is grouped by drillhole (leave-one-hole-out). Metrics are RMSE, R², skill relative to the mean, and coverage of the 90 % interval.
+Cross-validation is **grouped by drillhole** (a hole is entirely train or test in a fold).
+
+| Site | CV scheme |
+|---|---|
+| Cloncurry feasibility | Leave-one-hole-out per deposit (`examples/feasibility_loho.jl`) |
+| Keivitsa | **K-fold by hole** — pilot: 30 holes, 3 folds; full run: all kept Cu holes, **10 folds** |
+
+**Skill** (Keivitsa pilot and full run): `1 − RMSE / RMSE_mean`, with RMSE pooled over all test samples in the evaluated folds and `RMSE_mean` computed against that fold’s **training** mean (not the test-set mean).
+
+Metrics also include RMSE, R², and coverage of the 90 % interval where uncertainty is reported.
 
 A method is considered useful only if it clearly beats the mean *and* is comparable to or better than kriging.
 
@@ -144,6 +154,7 @@ Cloncurry detection-limit policy (district, before deposit filter): censoring li
 | `examples/export_cloncurry_blockmodel.jl` | VTK + Cu figure (legacy checkpoints) |
 | `examples/variogram_cloncurry.jl` | directional variogram |
 | `examples/kriging_cloncurry_petro.jl` | ordinary-kriging baseline |
+| `examples/calibration_plot_cloncurry.jl` | calibration figure (legacy checkpoints) |
 | `examples/kriging_env/` | isolated GeoStats.jl kriging env |
 | `docs/keivitsa_data_notes.md` | GTK conventions (statistics only) |
 | `docs/2026-09_cloncurry_feasibility_report.md` | Cloncurry LOHO report |
@@ -167,17 +178,18 @@ julia --project=. examples/feasibility_keivitsa_pilot.jl
 julia --project=. examples/feasibility_loho.jl
 ```
 
-| Variable | Meaning |
-|---|---|
-| `KEIVITSA_ROOT` | GTK `source/gtk` tree (required for Keivitsa) |
-| `CLONCURRY_ROOT` | METAL package root |
+| Variable | Default | Meaning |
+|---|---|---|
+| `KEIVITSA_ROOT` | — | GTK `source/gtk` tree (required for Keivitsa) |
+| `CLONCURRY_ROOT` | `~/Desktop/datasets4HY/Cloncurry_integrated_2026-09-17` | METAL package root |
+| `SMARTPRIOR_WORK` | `tmp_feasibility` or script-specific | Output dir for feasibility / pilot runs |
 
 Legacy district train / hold-out / VTK export: `examples/train_cloncurry_prior.jl`, `examples/holdout_cloncurry_prior.jl`, `examples/export_cloncurry_blockmodel.jl` (see legacy-path note above).
 
 ## Roadmap
 
 1. Semi-synthetic benchmark: hole geometry × correlation length (experiment 1), then multiple properties, lithology and censoring.
-2. Keivitsa LOHO feasibility, then Phase 2: shared multi-output network, censored likelihood, block averaging.
+2. Keivitsa **10-fold** feasibility (after pilot check B passes), then Phase 2: shared multi-output network, censored likelihood, block averaging.
 3. Visualisation: GLMakie block viewer showing μ, σ and exceedance probability, faded by distance to data; VTK export.
 
 ## License
