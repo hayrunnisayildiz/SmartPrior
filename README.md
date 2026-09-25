@@ -23,6 +23,34 @@ Skill is `1 − RMSE / RMSE_mean`, pooled over held-out samples, with 10-fold ho
 
 **Cloncurry.** At 100–370 m hole spacing with 4–11 holes per site, no method beats the mean.
 
+![Pooled skill with 95 % hole-bootstrap CI](docs/figures/skill_ci.png)
+
+*Pooled Cu skill. Neural field (`nn_xyz` / `nn_cov`) sits above the 0.10 line; intervals overlap kriging (v1).*
+
+![Predicted vs observed log10 Cu](docs/figures/pred_vs_obs.png)
+
+*Held-out predicted vs observed. Both methods track the 1:1 line; the neural field is not a mean collapse.*
+
+![Per-fold 90 % predictive coverage](docs/figures/coverage_per_fold.png)
+
+*90 % coverage by fold (corrected kriging σ). Kriging (v1) stays ~0.75–0.81; `nn_xyz` is closer to the nominal 0.90.*
+
+![Calibration curve](docs/figures/calibration_curve.png)
+
+*Predictive calibration (corrected σ). Neural-field intervals are closer to the diagonal than kriging (v1).*
+
+![Keivitsa Cu μ block model](docs/figures/3d_mu.png)
+
+*Block-model μ (log10 Cu), kept blocks ≤60 m from a hole. Kriging is grainier; the neural field is smoother.*
+
+![E–W section μ and σ](docs/figures/section_mu_sigma.png)
+
+*E–W section through mean drilling northing. Bottom row: kriging σ is nearly flat; neural-field σ rises near the surface and gaps.*
+
+![High-grade shell](docs/figures/3d_shell.png)
+
+*Blocks with μ ≥ 2.5 (≈316 ppm Cu). Shell geometry differs; count of blocks above threshold is higher for the neural field.*
+
 ## Pipeline
 
 ```mermaid
