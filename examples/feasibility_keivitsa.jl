@@ -455,6 +455,7 @@ function main_keivitsa_locked()
     logmsg("NN E2: loss=:nll stop_on=:val_rmse seeds=$(NN_SEEDS)")
     logmsg("NN loss curves every $(LOSS_LOG_EVERY) steps → loss_curves.tsv")
     logmsg("julia " * string(VERSION))
+    logmsg("kriging self-check: GeoStats returns variance as σ = $(kriging_sigma_is_variance())")
     logmsg("work $WORK")
 
     table, covs, cfg = load_site(SITE_PATH)

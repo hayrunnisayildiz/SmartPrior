@@ -273,6 +273,69 @@ function bin_experimental(dist, semi, n_lags, maxlag)
     return centers, experimental
 end
 
+# Same result as `collect_pairs` followed by `bin_experimental`, without
+# storing every pair. Each bin sums its pairs in the same order as the two-step
+# version, so the bins are bit-identical. Memory is O(n_lags), not O(n^2):
+# the stored-pair version runs out of memory on dense tables (Keivitsa density).
+function binned_variogram(x, y, z, v, hole; maxlag_h, maxlag_v, dip_deg, n_lags)
+    # Collected so the bin search compares the same edge values `bin_experimental` indexes.
+    edges_h = collect(range(0.0, Float64(maxlag_h); length = n_lags + 1))
+    edges_v = collect(range(0.0, Float64(maxlag_v); length = n_lags + 1))
+    sum_h = zeros(Float64, n_lags)
+    cnt_h = zeros(Int, n_lags)
+    sum_v = zeros(Float64, n_lags)
+    cnt_v = zeros(Int, n_lags)
+    n = length(v)
+    @inbounds for j in 2:n
+        xj, yj, zj, vj, hj = x[j], y[j], z[j], v[j], hole[j]
+        for i in 1:(j - 1)
+            dx = xj - x[i]
+            dy = yj - y[i]
+            dz = zj - z[i]
+            horiz = hypot(dx, dy)
+            d3 = hypot(horiz, dz)
+            sv = 0.5 * (v[i] - vj)^2
+            if !isempty(hj) && hj == hole[i] && d3 > 0 && d3 <= maxlag_v
+                k = _lag_bin(edges_v, d3, n_lags)
+                if k > 0
+                    sum_v[k] += sv
+                    cnt_v[k] += 1
+                end
+            end
+            if horiz > 0 && horiz <= maxlag_h && atand(abs(dz), horiz) <= dip_deg
+                k = _lag_bin(edges_h, horiz, n_lags)
+                if k > 0
+                    sum_h[k] += sv
+                    cnt_h[k] += 1
+                end
+            end
+        end
+    end
+    bins_h, exp_h = _bins_from_sums(edges_h, sum_h, cnt_h, n_lags)
+    bins_v, exp_v = _bins_from_sums(edges_v, sum_v, cnt_v, n_lags)
+    return bins_h, exp_h, bins_v, exp_v, sum(cnt_h), sum(cnt_v)
+end
+
+# The bin k with edges[k] < d <= edges[k + 1], as in `bin_experimental`; 0 if none.
+function _lag_bin(edges, d, n_lags)
+    i = searchsortedfirst(edges, d)
+    k = i - 1
+    (1 <= k <= n_lags && edges[k] < d && d <= edges[k + 1]) || return 0
+    return k
+end
+
+function _bins_from_sums(edges, s, c, n_lags)
+    centers = Float64[]
+    experimental = Float64[]
+    for k in 1:n_lags
+        if c[k] > 0
+            push!(centers, 0.5 * (edges[k] + edges[k + 1]))
+            push!(experimental, s[k] / c[k])
+        end
+    end
+    return centers, experimental
+end
+
 function sse_variogram(name, bins_h, exp_h, bins_v, exp_v, p)
     ah, av, partial, nugget = p
     s = 0.0
@@ -398,16 +461,15 @@ function fit_variogram(x, y, z, v, hole; context::AbstractString)
     vspan = maximum(z) - minimum(z)
     maxlag_h = max(10.0, 0.5 * hspan)
     maxlag_v = max(10.0, 0.5 * vspan)
-    dh, gh, dv, gv = collect_pairs(x, y, z, v, hole;
-                                   maxlag_h = maxlag_h, maxlag_v = maxlag_v,
-                                   dip_deg = HORIZONTAL_DIP_DEG)
-    if length(dh) < MIN_PAIRS || length(dv) < MIN_PAIRS
+    bins_h, exp_h, bins_v, exp_v, n_pairs_h, n_pairs_v =
+        binned_variogram(x, y, z, v, hole;
+                         maxlag_h = maxlag_h, maxlag_v = maxlag_v,
+                         dip_deg = HORIZONTAL_DIP_DEG, n_lags = N_LAGS)
+    if n_pairs_h < MIN_PAIRS || n_pairs_v < MIN_PAIRS
         fail("$context: variogram pair count below $(MIN_PAIRS) " *
-             "(horizontal $(length(dh)), downhole $(length(dv)); " *
+             "(horizontal $(n_pairs_h), downhole $(n_pairs_v); " *
              "maxlag_h $(maxlag_h) m, maxlag_v $(maxlag_v) m)")
     end
-    bins_h, exp_h = bin_experimental(dh, gh, N_LAGS, maxlag_h)
-    bins_v, exp_v = bin_experimental(dv, gv, N_LAGS, maxlag_v)
     if length(bins_h) < 3 || length(bins_v) < 3
         fail("$context: fewer than 3 occupied variogram bins " *
              "(horizontal $(length(bins_h)), downhole $(length(bins_v)))")
@@ -434,7 +496,7 @@ function fit_variogram(x, y, z, v, hole; context::AbstractString)
     total > 0 || fail("$context: variogram total sill is not positive")
     ratio = partial / total
     return VarioFit(best.name, nugget, partial, total, best.p[1], best.p[2],
-                    best.rmse, length(dh), length(dv), length(bins_h), length(bins_v),
+                    best.rmse, n_pairs_h, n_pairs_v, length(bins_h), length(bins_v),
                     ratio < 0.05)
 end
 
@@ -470,6 +532,33 @@ function idw_predict(tx, ty, tz, tv, qx, qy, qz, ratio)
     return pred
 end
 
+# GeoStats' ordinary kriging with `prob = true` returns a Normal whose second
+# parameter is, in the installed version, the kriging VARIANCE, not the standard
+# deviation (checked 2026-09-25: two uncorrelated points, sill 100, query far away
+# gives std(d) = 150 = variance; the standard deviation is √150 ≈ 12.25).
+# The behaviour is measured once on that known case, so a future GeoStats fix
+# is picked up automatically instead of being silently square-rooted twice.
+const _KRIGING_SIGMA_IS_VARIANCE = Ref{Union{Nothing, Bool}}(nothing)
+
+function kriging_sigma_is_variance()
+    flag = _KRIGING_SIGMA_IS_VARIANCE[]
+    flag === nothing || return flag
+    gtb = georef((value = [0.0, 1.0],), [Point(0.0, 0.0, 0.0), Point(1.0, 0.0, 0.0)])
+    γ = SphericalVariogram(; ranges = (1.0, 1.0, 1.0), sill = 100.0, nugget = 0.0)
+    out = gtb |> InterpolateNeighbors([Point(1000.0, 0.0, 0.0)];
+                                      model = Kriging(γ), prob = true)
+    s = std(out.value[1])
+    flag = if isapprox(s, 150.0; rtol = 1.0e-6)
+        true
+    elseif isapprox(s, sqrt(150.0); rtol = 1.0e-6)
+        false
+    else
+        fail("kriging self-check: std of the known case is $s, expected 150 (variance) or √150")
+    end
+    _KRIGING_SIGMA_IS_VARIANCE[] = flag
+    return flag
+end
+
 function kriging_predict(tx, ty, tz, tv, qx, qy, qz, fit::VarioFit)
     gtb = georef((value = tv,), Point.(tx, ty, tz))
     ranges = (fit.range_h, fit.range_h, fit.range_v)
@@ -492,13 +581,14 @@ function kriging_predict(tx, ty, tz, tv, qx, qy, qz, fit::VarioFit)
     length(dists) == n || fail("kriging returned $(length(dists)) rows for $n queries")
     μ = Vector{Float64}(undef, n)
     σ = Vector{Float64}(undef, n)
+    is_var = kriging_sigma_is_variance()
     for i in 1:n
         d = dists[i]
         if ismissing(d)
             fail("kriging prediction $i is missing")
         end
         μ[i] = mean(d)
-        σ[i] = std(d)
+        σ[i] = is_var ? sqrt(std(d)) : std(d)
     end
     all(isfinite, μ) && all(isfinite, σ) && all(>=(0), σ) || fail(
         "kriging mean or standard deviation is not finite and non-negative")

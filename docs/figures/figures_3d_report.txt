@@ -1,0 +1,13 @@
+backend	GLMakie
+kept_blocks_read	80761
+kept_blocks_report	80761
+cu_holes	261
+blocks_plotted_3d	40381
+shell_thresh_log10_cu	2.5
+shell_blocks_kriging_v1	38117
+shell_blocks_neural_field	49792
+dpi	150
+camera_azimuth	-1.5707963267948966
+camera_elevation	0.5654866776461628
+source_tsv	/Users/hayrunnisayildiz/SmartPriorModel/tmp_keivitsa_blockmodel/keivitsa_blockmodel.tsv
+source_samples	/Users/hayrunnisayildiz/SmartPriorModel/tmp_keivitsa_blockmodel/samples_local.tsv

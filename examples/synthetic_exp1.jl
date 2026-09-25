@@ -343,6 +343,33 @@ function fit_variogram(x, y, z, v, hole; context::AbstractString)
                     ratio < 0.05)
 end
 
+# GeoStats' ordinary kriging with `prob = true` returns a Normal whose second
+# parameter is, in the installed version, the kriging VARIANCE, not the standard
+# deviation (checked 2026-09-25: two uncorrelated points, sill 100, query far away
+# gives std(d) = 150 = variance; the standard deviation is √150 ≈ 12.25).
+# The behaviour is measured once on that known case, so a future GeoStats fix
+# is picked up automatically instead of being silently square-rooted twice.
+const _KRIGING_SIGMA_IS_VARIANCE = Ref{Union{Nothing, Bool}}(nothing)
+
+function kriging_sigma_is_variance()
+    flag = _KRIGING_SIGMA_IS_VARIANCE[]
+    flag === nothing || return flag
+    gtb = georef((value = [0.0, 1.0],), [Point(0.0, 0.0, 0.0), Point(1.0, 0.0, 0.0)])
+    γ = SphericalVariogram(; ranges = (1.0, 1.0, 1.0), sill = 100.0, nugget = 0.0)
+    out = gtb |> InterpolateNeighbors([Point(1000.0, 0.0, 0.0)];
+                                      model = Kriging(γ), prob = true)
+    s = std(out.value[1])
+    flag = if isapprox(s, 150.0; rtol = 1.0e-6)
+        true
+    elseif isapprox(s, sqrt(150.0); rtol = 1.0e-6)
+        false
+    else
+        fail("kriging self-check: std of the known case is $s, expected 150 (variance) or √150")
+    end
+    _KRIGING_SIGMA_IS_VARIANCE[] = flag
+    return flag
+end
+
 function kriging_predict(tx, ty, tz, tv, qx, qy, qz, fit::VarioFit)
     gtb = georef((value = tv,), Point.(tx, ty, tz))
     ranges = (fit.range_h, fit.range_h, fit.range_v)
@@ -365,13 +392,14 @@ function kriging_predict(tx, ty, tz, tv, qx, qy, qz, fit::VarioFit)
     length(dists) == n || fail("kriging returned $(length(dists)) rows for $n queries")
     μ = Vector{Float64}(undef, n)
     σ = Vector{Float64}(undef, n)
+    is_var = kriging_sigma_is_variance()
     for i in 1:n
         d = dists[i]
         if ismissing(d)
             fail("kriging prediction $i is missing")
         end
         μ[i] = mean(d)
-        σ[i] = std(d)
+        σ[i] = is_var ? sqrt(std(d)) : std(d)
     end
     all(isfinite, μ) && all(isfinite, σ) && all(>=(0), σ) || fail(
         "kriging mean or standard deviation is not finite and non-negative")

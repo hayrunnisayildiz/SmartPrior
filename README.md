@@ -1,22 +1,27 @@
 # SmartPrior
 
-A Julia / Lux.jl neural field that predicts a rock property, and its uncertainty, at any 3D point from sparse drillholes. The primary test is Keivitsa Cu; Cloncurry is the sparse-spacing reference.
+A Julia / Lux.jl neural field that predicts a rock property, and its uncertainty, at any 3D point from sparse drillholes. The primary test site is Keivitsa (GTK, Finland): copper is complete, density is complete. Cloncurry is the sparse-spacing reference.
 
-![Keivitsa Cu uncertainty: kriging (v1) is tight almost everywhere; the neural field is larger and structured](docs/figures/3d_sigma.png)
+![Keivitsa Cu uncertainty: kriging (v1) is nearly flat; the neural field is larger and structured](docs/figures/3d_sigma.png)
 
-*Predicted σ for log10 Cu. Kriging (v1) stays near 0.15–0.2; the neural field is larger near isolated holes and the surface.*
+*Predicted σ for log10 Cu. Kriging (v1) stays near 0.4–0.45; the neural field is 0.5–1.2, larger near isolated holes, the edges of the drilled volume, and the surface.*
+
+> **Correction (2026-09-25).** GeoStats.jl, in the version pinned here, returns ordinary-kriging predictions as `Normal(μ, σ²)`: the second parameter is the kriging *variance*. Earlier runs read it as the standard deviation, so every kriging σ and kriging coverage reported before this date is wrong. Kriging means, RMSE and skill are unaffected, and so are all neural-field results. `kriging_predict` now checks the behaviour on a known case and takes the square root when needed (`examples/check_kriging_sigma.jl`). The corrected numbers are below. The coverage, calibration, 3D and section figures in `docs/figures/` were regenerated with the corrected kriging σ.
 
 ## Key results
 
-On Keivitsa Cu (261 holes, 10-fold hole-grouped CV) the neural field is non-inferior to kriging (v1): skill 0.151 vs 0.106; the pooled difference is not significant.
+Skill is `1 − RMSE / RMSE_mean`, pooled over held-out samples, with 10-fold hole-grouped cross-validation. Coverage is the share of held-out samples inside the 90 % interval (nominal 0.90).
 
-Its uncertainty is calibrated: 90 % intervals cover 0.74–0.92 per fold vs 0.43–0.54 for kriging (v1).
+| Site / target | Holes | Samples | Kriging (v1) skill | Neural field skill | Kriging (v1) coverage | Neural field coverage |
+|---|---:|---:|---:|---:|---:|---:|
+| Keivitsa Cu (log10 ppm) | 261 | 15,859 | 0.106 | 0.151 (`nn_xyz`) | 0.78 | 0.87 |
+| Keivitsa density (kg/m³) | 263 | 30,908 | 0.058 | 0.059 (`nn_xyz`), 0.065 (`nn_cov`) | 0.77 | 0.89 (`nn_xyz`), 0.90 (`nn_cov`) |
 
-At Cloncurry's sparse spacing no method beats the mean.
+**Copper.** The neural field is non-inferior to kriging (v1): all three pre-registered conditions pass. The pooled difference is not significant. Both methods under-cover; kriging (v1) is more overconfident (0.78 vs 0.87). The earlier claim of 0.48 kriging coverage came from the variance bug.
 
-![Skill with 95 % confidence intervals](docs/figures/skill_ci.png)
+**Density.** Coordinates carry little information about density: RMSE falls from 146.1 to 137.5 kg/m³ against the training mean. The pre-registered rule is not met (`useful = 0`): skill is below 0.10, although its 95 % interval (0.003 … 0.114 for `nn_xyz`) sits above 0. Per hole, the network beats kriging (v1) on 153 of 263 holes, mean paired skill difference +0.055 (0.016 … 0.093). The network's intervals are well calibrated (0.89–0.90); kriging (v1) is overconfident (0.77).
 
-*Pooled skill on all 15,859 Keivitsa Cu samples. The neural-field interval sits above 0 and overlaps kriging (v1).*
+**Cloncurry.** At 100–370 m hole spacing with 4–11 holes per site, no method beats the mean.
 
 ## Pipeline
 
@@ -27,11 +32,12 @@ flowchart LR
   adapter --> samples["SampleTable"]
   samples --> cov["covariates"]
   cov --> cv["hole-grouped CV"]
+  cv --> bm["block model"]
 ```
 
 ![Network: Fourier xyz, MLP, μ and σ](docs/figures/network_architecture.png)
 
-*Five-member ensemble. Coordinates are Fourier-encoded; other covariates are appended. The head emits μ and σ.*
+*Five-member ensemble. Coordinates are Fourier-encoded (16 bands); other covariates are appended. A 3 × 64 GELU MLP emits μ and softplus σ. The cross-validation uses `build_mlp` in `examples/feasibility_loho.jl`, not `src/PriorNet.jl`.*
 
 ## Quick start
 
@@ -41,8 +47,16 @@ Set `KEIVITSA_ROOT` to the unpacked GTK `source/gtk` tree. Data stay outside the
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
 julia --project=. -e 'using Pkg; Pkg.test()'
 
-julia --project=. examples/diagnose_nn_keivitsa.jl
+# sanity checks, no GTK data needed (seconds)
+julia --project=. examples/check_kriging_sigma.jl
+julia --project=. examples/check_binned_variogram.jl
+
+# Keivitsa cross-validation; target = cu (default) | density | susceptibility
+export KEIVITSA_ROOT=/path/to/gtk
 julia --project=. examples/feasibility_keivitsa.jl
+SMARTPRIOR_TARGET=density julia --project=. examples/feasibility_keivitsa.jl
+
+julia --project=. examples/diagnose_nn_keivitsa.jl
 julia --project=. examples/keivitsa_run2_checks.jl
 julia --project=. examples/keivitsa_blockmodel.jl
 julia --project=. examples/figures_data.jl
@@ -51,7 +65,7 @@ julia --project=. examples/figures_results.jl
 julia --project=. examples/figures_3d.jl
 ```
 
-The feasibility script refuses a non-empty work directory and a leftover `.run.lock`, so two runs cannot share one output folder.
+Outputs go to `tmp_feasibility_keivitsa/` for Cu and `tmp_feasibility_keivitsa_<target>/` for other targets (all gitignored). The script refuses a non-empty work directory and a leftover `.run.lock`, so two runs cannot share one output folder. It logs a runtime estimate after the first fold; the density run took 3.2 h on a MacBook Air.
 
 ## Repository layout
 
@@ -65,17 +79,29 @@ The feasibility script refuses a non-empty work directory and a leftover `.run.l
 | `sites/*.toml` | site boxes, CRS, properties |
 | `examples/keivitsa_inspect.jl` | data checks |
 | `examples/diagnose_nn_keivitsa.jl` | synthetic stopping diagnosis |
-| `examples/feasibility_keivitsa.jl` | 10-fold Keivitsa Cu CV |
+| `examples/feasibility_keivitsa.jl` | 10-fold Keivitsa CV, target set by `SMARTPRIOR_TARGET` |
 | `examples/keivitsa_run2_checks.jl` | byte compare, coverage, variograms |
-| `examples/keivitsa_blockmodel.jl` | final block model |
+| `examples/keivitsa_blockmodel.jl` | final Cu block model |
 | `examples/figures_{data,training,results,3d}.jl` | report figures |
-| `examples/feasibility_loho.jl` | Cloncurry leave-one-hole-out |
+| `examples/feasibility_loho.jl` | Cloncurry leave-one-hole-out; shared kriging and network code |
 | `examples/feasibility_keivitsa_pilot.jl` | 30-hole pilot |
-| `docs/figures/` | figures cited below |
+| `examples/check_kriging_sigma.jl` | kriging σ is a standard deviation (known case) |
+| `examples/check_binned_variogram.jl` | streaming variogram bins equal stored-pair bins |
+| `examples/synthetic_exp1.jl` | synthetic-field experiment |
+| `examples/variogram_cloncurry.jl` | Cloncurry variograms |
+| `examples/kriging_cloncurry_petro.jl`, `examples/kriging_env/` | Cloncurry petrophysics kriging |
+| `examples/calibration_plot_cloncurry.jl` | Cloncurry calibration plot |
+| `examples/export_cloncurry_blockmodel.jl` | Cloncurry block-model export |
+| `docs/figures/` | figures cited in the reports |
 | `docs/2026-09_keivitsa_technical_report.md` | Keivitsa report |
 | `docs/2026-09_cloncurry_feasibility_report.md` | Cloncurry report |
 | `docs/keivitsa_data_notes.md` | GTK conventions, statistics only |
 
-Full write-up: [Keivitsa technical report](docs/2026-09_keivitsa_technical_report.md).
+Full write-up: [Keivitsa technical report](docs/2026-09_keivitsa_technical_report.md). The report carries the corrected kriging coverage and σ, and a density section.
 
-GTK data are never committed. Check the GTK licence terms before publishing figures derived from the data. The legacy scripts `examples/train_cloncurry_prior.jl` and `examples/holdout_cloncurry_prior.jl` fed held-out holes' own geochemistry into the network; do not cite those RMSE tables.
+## Notes
+
+- The kriging variogram step counts point pairs without storing them (memory O(bins) instead of O(n²)). The stored-pair version ran out of memory on Keivitsa density, about 250 million pairs per fold; the check script shows the bins are bit-identical.
+- Kriging (v1) pins the vertical range at the optimiser bound in most folds for both Cu and density. Kriging (v2) is the next baseline.
+- GTK data are never committed. Check the GTK licence terms before publishing figures derived from the data.
+- The legacy scripts `examples/train_cloncurry_prior.jl` and `examples/holdout_cloncurry_prior.jl` fed held-out holes' own geochemistry into the network; do not cite those RMSE tables.
