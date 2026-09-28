@@ -1,6 +1,6 @@
 # SmartPrior
 
-A Julia / Lux.jl neural field that predicts a rock property, and its uncertainty, at any 3D point from sparse drillholes. The primary test site is Keivitsa (GTK, Finland): copper is complete, density is complete. Cloncurry is the sparse-spacing reference.
+A Julia / Lux.jl neural field that predicts a rock property, and its uncertainty, at any 3D point from sparse drillholes. The test site is Keivitsa (GTK, Finland): copper is complete, density is complete.
 
 ![Keivitsa Cu uncertainty: kriging (v1) is nearly flat; the neural field is larger and structured](docs/figures/3d_sigma.png)
 
@@ -20,8 +20,6 @@ Skill is `1 − RMSE / RMSE_mean`, pooled over held-out samples, with 10-fold ho
 **Copper.** The neural field is non-inferior to kriging (v1): all three pre-registered conditions pass. The pooled difference is not significant. Both methods under-cover; kriging (v1) is more overconfident (0.78 vs 0.87). The earlier claim of 0.48 kriging coverage came from the variance bug.
 
 **Density.** Coordinates carry little information about density: RMSE falls from 146.1 to 137.5 kg/m³ against the training mean. The pre-registered rule is not met (`useful = 0`): skill is below 0.10, although its 95 % interval (0.003 … 0.114 for `nn_xyz`) sits above 0. Per hole, the network beats kriging (v1) on 153 of 263 holes, mean paired skill difference +0.055 (0.016 … 0.093). The network's intervals are well calibrated (0.89–0.90); kriging (v1) is overconfident (0.77).
-
-**Cloncurry.** At 100–370 m hole spacing with 4–11 holes per site, no method beats the mean.
 
 ![Pooled skill with 95 % hole-bootstrap CI](docs/figures/skill_ci.png)
 
@@ -65,14 +63,14 @@ flowchart LR
 
 ![Network: Fourier xyz, MLP, μ and σ](docs/figures/network_architecture.png)
 
-*Five-member ensemble. Coordinates are Fourier-encoded (16 bands); other covariates are appended. A 3 × 64 GELU MLP emits μ and softplus σ. The cross-validation uses `build_mlp` in `examples/feasibility_loho.jl`, not `src/PriorNet.jl`.*
+*Five-member ensemble. Coordinates are Fourier-encoded (16 bands); other covariates are appended. A 3 × 64 GELU MLP emits μ and softplus σ. The network is `build_mlp` in `examples/keivitsa_common.jl`.*
 
 ## Quick start
 
 Set `KEIVITSA_ROOT` to the unpacked GTK `source/gtk` tree. Data stay outside the repo.
 
 ```bash
-julia --project=. -e 'using Pkg; Pkg.instantiate()'
+julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.resolve()'
 julia --project=. -e 'using Pkg; Pkg.test()'
 
 # sanity checks, no GTK data needed (seconds)
@@ -100,30 +98,28 @@ Outputs go to `tmp_feasibility_keivitsa/` for Cu and `tmp_feasibility_keivitsa_<
 | Path | Role |
 |---|---|
 | `src/SmartPrior.jl` | module entry |
-| `src/{Schema,Sites,Covariates,Desurvey}.jl` | site schema, covariates, desurvey |
-| `src/{CloncurryIO,KeivitsaIO}.jl` | adapters to `SampleTable` |
-| `src/{Grid,Features,PriorNet,Losses,Train,Metrics}.jl` | legacy grid stack |
+| `src/Schema.jl` | `SampleTable` and `PropertySpec` |
+| `src/Sites.jl` | `load_site`: site file → table + covariates |
+| `src/Covariates.jl` | `CoordinateCovariate`, `DepthCovariate`, `DepthBelowSurface` |
+| `src/Desurvey.jl` | minimum-curvature desurvey |
+| `src/KeivitsaIO.jl` | GTK adapter to `SampleTable` |
 | `src/SyntheticFields.jl` | seedable Gaussian fields |
-| `sites/*.toml` | site boxes, CRS, properties |
+| `sites/keivitsa.toml` | Keivitsa box, CRS (EPSG:2393), properties, covariates |
+| `examples/keivitsa_common.jl` | shared variogram, kriging, network, and bookkeeping code (included by the scripts below, not run on its own) |
 | `examples/keivitsa_inspect.jl` | data checks |
 | `examples/diagnose_nn_keivitsa.jl` | synthetic stopping diagnosis |
 | `examples/feasibility_keivitsa.jl` | 10-fold Keivitsa CV, target set by `SMARTPRIOR_TARGET` |
 | `examples/keivitsa_run2_checks.jl` | byte compare, coverage, variograms |
 | `examples/keivitsa_blockmodel.jl` | final Cu block model |
 | `examples/figures_{data,training,results,3d}.jl` | report figures |
-| `examples/feasibility_loho.jl` | Cloncurry leave-one-hole-out; shared kriging and network code |
 | `examples/feasibility_keivitsa_pilot.jl` | 30-hole pilot |
 | `examples/check_kriging_sigma.jl` | kriging σ is a standard deviation (known case) |
 | `examples/check_binned_variogram.jl` | streaming variogram bins equal stored-pair bins |
-| `examples/synthetic_exp1.jl` | synthetic-field experiment |
-| `examples/variogram_cloncurry.jl` | Cloncurry variograms |
-| `examples/kriging_cloncurry_petro.jl`, `examples/kriging_env/` | Cloncurry petrophysics kriging |
-| `examples/calibration_plot_cloncurry.jl` | Cloncurry calibration plot |
-| `examples/export_cloncurry_blockmodel.jl` | Cloncurry block-model export |
 | `docs/figures/` | figures cited in the reports |
 | `docs/2026-09_keivitsa_technical_report.md` | Keivitsa report |
-| `docs/2026-09_cloncurry_feasibility_report.md` | Cloncurry report |
 | `docs/keivitsa_data_notes.md` | GTK conventions, statistics only |
+| `test/` | package tests; `test/fixtures/keivitsa_tiny/` is a synthetic GTK-format fixture |
+| `legacy/grid_stack/` | archived grid-based prior (`PriorGrid`, `PriorNet`, training loop); not loaded by the package |
 
 Full write-up: [Keivitsa technical report](docs/2026-09_keivitsa_technical_report.md). The report carries the corrected kriging coverage and σ, and a density section.
 
@@ -132,4 +128,4 @@ Full write-up: [Keivitsa technical report](docs/2026-09_keivitsa_technical_repor
 - The kriging variogram step counts point pairs without storing them (memory O(bins) instead of O(n²)). The stored-pair version ran out of memory on Keivitsa density, about 250 million pairs per fold; the check script shows the bins are bit-identical.
 - Kriging (v1) pins the vertical range at the optimiser bound in most folds for both Cu and density. Kriging (v2) is the next baseline.
 - GTK data are never committed. Check the GTK licence terms before publishing figures derived from the data.
-- The legacy scripts `examples/train_cloncurry_prior.jl` and `examples/holdout_cloncurry_prior.jl` fed held-out holes' own geochemistry into the network; do not cite those RMSE tables.
+- `legacy/grid_stack/` keeps the earlier grid-based prior (`PriorGrid`, `PriorNet`, `train_prior`) as its own module, `GridStack`. The Keivitsa pipeline does not use it. Its tests run with `julia --project=. legacy/grid_stack/test/runtests.jl` after `Pkg.add("JLD2")`; see `legacy/grid_stack/README.md` for known issues.

@@ -6,7 +6,7 @@
 
 const ROOT = dirname(@__DIR__)
 ENV["SMARTPRIOR_WORK"] = joinpath(ROOT, "tmp_keivitsa_pilot")
-include(joinpath(@__DIR__, "feasibility_loho.jl"))
+include(joinpath(@__DIR__, "keivitsa_common.jl"))
 
 const SITE_PATH = joinpath(ROOT, "sites", "keivitsa.toml")
 const DEPOSIT = "keivitsa"

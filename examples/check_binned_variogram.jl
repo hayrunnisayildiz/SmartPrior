@@ -4,7 +4,7 @@
 # Run:  julia --project=. examples/check_binned_variogram.jl
 
 ENV["SMARTPRIOR_WORK"] = mktempdir()
-include(joinpath(@__DIR__, "feasibility_loho.jl"))
+include(joinpath(@__DIR__, "keivitsa_common.jl"))
 using Random
 
 function check_once(seed, n)

@@ -6,7 +6,7 @@
 # Run:  julia --project=. examples/check_kriging_sigma.jl
 
 ENV["SMARTPRIOR_WORK"] = mktempdir()
-include(joinpath(@__DIR__, "feasibility_loho.jl"))
+include(joinpath(@__DIR__, "keivitsa_common.jl"))
 
 fit = VarioFit("spherical", 0.0, 100.0, 100.0, 1.0, 1.0, 0.0, 0, 0, 0, 0, false)
 μ, σ = kriging_predict([0.0, 1.0], [0.0, 0.0], [0.0, 0.0], [0.0, 1.0],

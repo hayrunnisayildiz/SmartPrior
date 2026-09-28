@@ -90,7 +90,7 @@ Neural field mapping `nin` features per cell to `(mu, sigma)` per property.
 
 `nproperties = 1` is a single-property field: the last layer is
 `Dense(width => 2)` and [`predict`](@ref) returns two length-`ncell` vectors.
-`nproperties = 4` is the Cloncurry layout — grade, density, susceptibility,
+`nproperties = 4` is the four-head layout — grade, density, susceptibility,
 conductivity_100kHz — with `Dense(width => 8)` and a `(4, ncell)` pair of
 matrices.
 

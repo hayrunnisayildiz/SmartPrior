@@ -8,8 +8,6 @@ On 261 holes and 15,859 samples the neural field (`nn_xyz`, stopping rule E2) re
 
 The strongest result is calibration. In every fold, 90 % intervals from the neural field cover 0.74–0.92 of the samples; kriging (v1) covers 0.43–0.54. Pooled coverage is 0.871 vs 0.480.
 
-At Cloncurry, where holes are hundreds of metres apart, no method beats the training mean. That result is unchanged.
-
 ## Data and verification
 
 Cu is method 511P, transformed to log10 ppm, with a fixed 1 ppm censoring limit. Training uses only samples on real holes. Each fold holds out whole holes: a test hole never enters training, standardisation, variogram fitting, or early stopping.
@@ -127,5 +125,5 @@ The comparison is therefore with kriging (v1). A variogram that can place a shor
 - Kriging (v2): a nugget the 33 m bins can see, and a vertical range that is not pinned at 972 m.
 - Density and magnetic susceptibility on the same hole-grouped folds.
 - Spatial-block cross-validation, not only hole groups.
-- Hole thinning, to see how skill changes as spacing approaches the Cloncurry regime.
+- Hole thinning, to see how skill changes as hole spacing grows to hundreds of metres.
 - Geophysical covariates that are known away from the drills.

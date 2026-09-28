@@ -131,7 +131,7 @@ end
 Relative weights of the loss terms.
 
 `grade`, `density`, `susceptibility`, `resistivity` and `conductivity` weight
-the named anchor groups. `conductivity` is the Cloncurry fourth head
+the named anchor groups. `conductivity` is the fourth head
 (`conductivity_100kHz`). They do not affect the single-property `anchor` term.
 """
 Base.@kwdef struct LossWeights
@@ -161,7 +161,7 @@ Everything the loss needs besides the network output.
 - `anchors`: `(cells, values, weights)` for the single-property path.
 - `anchors_grade`, `anchors_density`, `anchors_susceptibility`,
   `anchors_resistivity`, `anchors_conductivity`: one independent NLL per
-  named property. `anchors_conductivity` is the Cloncurry fourth head
+  named property. `anchors_conductivity` is the fourth head
   (`conductivity_100kHz`). The NLL is scored in units of that group's
   weighted std and doubled so a one-std residual with `sigma` equal to that
   std is `1.0`.

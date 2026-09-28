@@ -12,7 +12,7 @@ if !haskey(ENV, "SMARTPRIOR_WORK") || isempty(ENV["SMARTPRIOR_WORK"])
 elseif !isabspath(ENV["SMARTPRIOR_WORK"])
     ENV["SMARTPRIOR_WORK"] = joinpath(ROOT, ENV["SMARTPRIOR_WORK"])
 end
-include(joinpath(@__DIR__, "feasibility_loho.jl"))
+include(joinpath(@__DIR__, "keivitsa_common.jl"))
 
 using WriteVTK
 

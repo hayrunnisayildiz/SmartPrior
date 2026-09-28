@@ -1,24 +1,21 @@
 # One survey: a sample table, the covariates the network is allowed to see,
 # and the parsed site file. Adding a district is a new TOML file plus, if
-# the rows are not already Cloncurry-shaped, an adapter. It is not a change
-# to the network.
+# the rows are not already in a supported layout, an adapter. It is not a
+# change to the network.
 
 const _SITE_CRS = Dict(
-    "cloncurry" => "EPSG:28354",
     "keivitsa" => "EPSG:2393",
 )
 
 """
     load_site(path) -> (table::SampleTable, covariates, cfg)
 
-Read a site TOML file. `source = "cloncurry"` loads rows through
-[`cloncurry_sample_table`](@ref). `source = "keivitsa"` loads rows through
+Read a site TOML file. `source = "keivitsa"` loads rows through
 [`keivitsa_sample_table`](@ref). The dataset root is `root` in the file
-(relative to the file's directory). Otherwise Cloncurry uses `CLONCURRY_ROOT`
-or the usual Desktop dump, and Keivitsa uses `KEIVITSA_ROOT`.
+(relative to the file's directory), otherwise `KEIVITSA_ROOT`.
 
-Each source accepts one CRS (`EPSG:28354` or `EPSG:2393`). Covariates are
-only those named in `covariates.use`. pXRF, drillhole lithology, and
+Each source accepts one CRS (`EPSG:2393` for Keivitsa). Covariates are only
+those named in `covariates.use`. pXRF, drillhole lithology, and
 `sample_distance` are rejected here.
 """
 function load_site(path::AbstractString)
@@ -34,12 +31,7 @@ function load_site(path::AbstractString)
     root = _site_root(cfg, path)
     # Reject a covariate list before touching the assay files.
     covs = _site_covariates(cfg, root)
-    table = if source == "cloncurry"
-        cloncurry_sample_table(root, cfg)
-    else
-        loaded, _ = keivitsa_sample_table(root, cfg)
-        loaded
-    end
+    table, _ = keivitsa_sample_table(root, cfg)
     return table, covs, cfg
 end
 
@@ -48,26 +40,10 @@ function _site_root(cfg, toml_path::AbstractString)
         r = String(cfg["root"])
         return isabspath(r) ? r : normpath(joinpath(dirname(toml_path), r))
     end
-    source = String(get(cfg, "source", ""))
-    if source == "keivitsa"
-        env = get(ENV, "KEIVITSA_ROOT", "")
-        isempty(env) && throw(ArgumentError(
-            "load_site: set root in the site file or KEIVITSA_ROOT"))
-        return env
-    end
-    env = get(ENV, "CLONCURRY_ROOT", "")
-    if !isempty(env)
-        return env
-    end
-    for c in (
-        joinpath(homedir(), "Desktop", "datasets4HY",
-                 "Cloncurry_integrated_2026-09-17"),
-        "/Users/hayrunnisayildiz/Desktop/datasets4HY/Cloncurry_integrated_2026-09-17",
-    )
-        isdir(joinpath(c, "derived")) && return c
-    end
-    throw(ArgumentError(
-        "load_site: set root in the site file or CLONCURRY_ROOT"))
+    env = get(ENV, "KEIVITSA_ROOT", "")
+    isempty(env) && throw(ArgumentError(
+        "load_site: set root in the site file or KEIVITSA_ROOT"))
+    return env
 end
 
 function _bounds_pair(cfg, axis::AbstractString)
@@ -92,11 +68,6 @@ function _cfg_table(cfg, key::AbstractString)
     return t
 end
 
-function _resolve_file(root::AbstractString, rel::AbstractString)
-    p = String(rel)
-    return isabspath(p) ? p : normpath(joinpath(root, p))
-end
-
 function _required_number(table, key::AbstractString, what::AbstractString)
     haskey(table, key) || throw(ArgumentError("load_site: missing $what"))
     x = Float64(table[key])
@@ -117,8 +88,6 @@ function _site_covariates(cfg, root::AbstractString)
     ylo, yhi = _bounds_pair(cfg, "y")
     zlo, zhi = _bounds_pair(cfg, "z")
     depth_cfg = _cfg_table(block, "depth")
-    struct_cfg = _cfg_table(block, "structure_distance")
-    surf_cfg = _cfg_table(block, "surface_geology")
 
     covs = Covariate[]
     for raw in use
@@ -142,22 +111,7 @@ function _site_covariates(cfg, root::AbstractString)
             else
                 push!(covs, DepthCovariate(zlo, zhi, d0, rho, period))
             end
-        elseif name == "structure_distance"
-            haskey(struct_cfg, "file") || throw(ArgumentError(
-                "load_site: missing covariates.structure_distance.file"))
-            h = _required_number(struct_cfg, "length_scale",
-                                 "covariates.structure_distance.length_scale")
-            path = _resolve_file(root, struct_cfg["file"])
-            push!(covs, StructureDistance(path, h))
-        elseif name == "surface_geology"
-            haskey(surf_cfg, "file") || throw(ArgumentError(
-                "load_site: missing covariates.surface_geology.file"))
-            path = _resolve_file(root, surf_cfg["file"])
-            push!(covs, SurfaceGeology(path))
         elseif name == "depth_below_surface"
-            String(get(cfg, "source", "")) == "keivitsa" || throw(ArgumentError(
-                "load_site: depth_below_surface uses Keivitsa collar elevations " *
-                "(finite Z other than 0)"))
             below = _cfg_table(block, "depth_below_surface")
             d0 = _required_number(below, "d0",
                                   "covariates.depth_below_surface.d0 (half the reference cell thickness)")
@@ -177,8 +131,7 @@ function _site_covariates(cfg, root::AbstractString)
         else
             throw(ArgumentError(
                 "load_site: unknown covariate $(repr(name)). " *
-                "Known: coordinates, depth, depth_below_surface, " *
-                "structure_distance, surface_geology"))
+                "Known: coordinates, depth, depth_below_surface"))
         end
     end
     return covs

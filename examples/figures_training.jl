@@ -4,7 +4,7 @@
 # Out:  docs/figures/{network_architecture,loss_curves,val_rmse_curves,nn_diagnosis}.png
 #
 # Reads numbers from TSVs only. Architecture labels are verified against
-# examples/feasibility_loho.jl constants (FOURIER_BANDS/MLP_*/NN_SEEDS).
+# examples/keivitsa_common.jl constants (FOURIER_BANDS/MLP_*/NN_SEEDS).
 
 using DelimitedFiles
 using Statistics
@@ -17,7 +17,7 @@ const ROOT = dirname(@__DIR__)
 const FIGDIR = joinpath(ROOT, "docs", "figures")
 const LOSS_TSV = joinpath(ROOT, "tmp_feasibility_keivitsa_run2", "loss_curves.tsv")
 const DIAG_TSV = joinpath(ROOT, "tmp_keivitsa_diag", "diagnosis_summary.tsv")
-const LOHO = joinpath(ROOT, "examples", "feasibility_loho.jl")
+const COMMON_SRC = joinpath(ROOT, "examples", "keivitsa_common.jl")
 
 const PX_PER_UNIT = 150 / 72   # 150 dpi
 
@@ -29,24 +29,24 @@ const COL_XYZ_FAINT = (COL_XYZ, 0.18)
 const COL_COV_FAINT = (COL_COV, 0.18)
 const COL_GREY_FAINT = (COL_GREY, 0.22)
 
-#---------- architecture constants from feasibility_loho.jl ----------
+#---------- architecture constants from keivitsa_common.jl ----------
 
-function read_loho_const(name::AbstractString)
-    for line in eachline(LOHO)
+function read_common_const(name::AbstractString)
+    for line in eachline(COMMON_SRC)
         m = match(Regex("^const\\s+" * name * "\\s*=\\s*(.+)"), line)
         m === nothing && continue
         return strip(m.captures[1])
     end
-    error("constant $name not found in $LOHO")
+    error("constant $name not found in $COMMON_SRC")
 end
 
 function architecture_spec()
-    bands = parse(Int, read_loho_const("FOURIER_BANDS"))
-    smin = parse(Float64, read_loho_const("FOURIER_SCALE_MIN"))
-    smax = parse(Float64, read_loho_const("FOURIER_SCALE_MAX"))
-    width = parse(Int, read_loho_const("MLP_WIDTH"))
-    depth = parse(Int, read_loho_const("MLP_DEPTH"))
-    seeds_txt = read_loho_const("NN_SEEDS")
+    bands = parse(Int, read_common_const("FOURIER_BANDS"))
+    smin = parse(Float64, read_common_const("FOURIER_SCALE_MIN"))
+    smax = parse(Float64, read_common_const("FOURIER_SCALE_MAX"))
+    width = parse(Int, read_common_const("MLP_WIDTH"))
+    depth = parse(Int, read_common_const("MLP_DEPTH"))
+    seeds_txt = read_common_const("NN_SEEDS")
     n_ens = count(c -> c == ',', seeds_txt) + 1
     n_fourier = 2 * 3 * bands   # sin+cos × 3 axes × bands
     return (; bands, smin, smax, width, depth, n_ens, n_fourier,
@@ -269,7 +269,7 @@ function fig_architecture(_backend::Symbol)
          color = :gray92, tsize = 13)
 
     text!(ax, 0.4, 0.35;
-          text = @sprintf("Constants from feasibility_loho.jl: FOURIER_BANDS=%d, scales [%.0f,%.0f], MLP_WIDTH=%d, MLP_DEPTH=%d, |NN_SEEDS|=%d  → nin(xyz)=%d",
+          text = @sprintf("Constants from keivitsa_common.jl: FOURIER_BANDS=%d, scales [%.0f,%.0f], MLP_WIDTH=%d, MLP_DEPTH=%d, |NN_SEEDS|=%d  → nin(xyz)=%d",
                           spec.bands, spec.smin, spec.smax, spec.width, spec.depth,
                           spec.n_ens, spec.nin_xyz),
           align = (:left, :center), fontsize = 10, color = COL_GREY)
@@ -422,7 +422,7 @@ end
 function main()
     isfile(LOSS_TSV) || error("missing $LOSS_TSV")
     isfile(DIAG_TSV) || error("missing $DIAG_TSV")
-    isfile(LOHO) || error("missing $LOHO")
+    isfile(COMMON_SRC) || error("missing $COMMON_SRC")
 
     println("Makie backend: $MAKIE_BACKEND")
 
