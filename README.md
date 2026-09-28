@@ -56,6 +56,18 @@ Details: [density section of the report](docs/2026-09_keivitsa_technical_report.
 
 *Read top to bottom: prepare the drillhole data, train the model, then test it on drillholes it has never seen.*
 
+The network is trained with AdamW on a Gaussian **NLL** loss. Early stopping watches **validation RMSE** (not NLL). Final Cu block model (`nn_xyz`, 5 seeds; checkpoint = lowest val RMSE):
+
+| Seed | Best step | Train NLL | Val NLL | Val RMSE |
+|---:|---:|---:|---:|---:|
+| 1 | 19 | 0.290 | 0.400 | 0.886 |
+| 2 | 16 | 0.299 | 0.370 | 0.847 |
+| 3 | 13 | 0.310 | 0.370 | 0.860 |
+| 4 | 21 | 0.299 | 0.351 | 0.848 |
+| 5 | 19 | 0.287 | 0.353 | 0.861 |
+
+Mean at those checkpoints: train NLL ≈ 0.30, val NLL ≈ 0.37, val RMSE ≈ 0.86. Training past the checkpoint keeps lowering train NLL while val NLL rises.
+
 ## Quick start
 
 Needs Julia 1.10+. Get the Keivitsa data from GTK's [Hakku](https://hakku.gtk.fi/en) service (the data are not in this repository).
