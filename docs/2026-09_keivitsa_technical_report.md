@@ -1,18 +1,20 @@
 # Keivitsa Cu feasibility
 
-*September 2026. Neural field vs kriging (v1) on GTK Keivitsa copper, 10-fold hole-grouped cross-validation.*
+*September 2026. Neural field vs kriging (v1) on GTK Keivitsa copper, 10-fold hole-grouped cross-validation. Data: GTK drillhole data downloaded from [Hakku](https://hakku.gtk.fi/en); licence and attribution are in the [README](../README.md#data).*
+
+> **Corrected 2026-09-28.** Earlier versions of this report read the kriging variance as a standard deviation (see the README changelog, 2026-09-25). The kriging coverage and σ values below are corrected. Kriging means, RMSE and skill, and all neural-field numbers, were not affected.
 
 ## Summary
 
 On 261 holes and 15,859 samples the neural field (`nn_xyz`, stopping rule E2) reaches pooled skill **0.151** (95 % CI 0.092 … 0.202). Kriging (v1) reaches **0.106** (0.016 … 0.185). The pre-set rule — skill ≥ 0.10, CI above 0, and skill at least kriging − 0.05 — is met (`decision.tsv`: all three flags 1). That is non-inferiority. It is not a demonstration that the network beats kriging.
 
-The strongest result is calibration. In every fold, 90 % intervals from the neural field cover 0.74–0.92 of the samples; kriging (v1) covers 0.43–0.54. Pooled coverage is 0.871 vs 0.480.
+Both methods under-cover, but the neural field is better calibrated. Its 90 % intervals cover 0.74–0.92 of the held-out samples per fold (pooled 0.87); kriging (v1) covers 0.75–0.81 per fold (pooled 0.78). The nominal value is 0.90.
 
 ## Data and verification
 
 Cu is method 511P, transformed to log10 ppm, with a fixed 1 ppm censoring limit. Training uses only samples on real holes. Each fold holds out whole holes: a test hole never enters training, standardisation, variogram fitting, or early stopping.
 
-The GTK tables were desurveyed with minimum curvature. Of 16,004 Cu samples in 289 holes, 15,859 in 261 holes are kept (8 holes lack a collar elevation; 20 lie about 3 km outside the drilled area). Desurveyed hole lengths match the collar table exactly. Details: docs/keivitsa_data_notes.md.
+The GTK tables were desurveyed with minimum curvature. Of 16,004 Cu samples in 289 holes, 15,859 in 261 holes are kept (8 holes lack a collar elevation; 20 lie about 3 km outside the drilled area). Desurveyed hole lengths match the collar table exactly. Details: [keivitsa_data_notes.md](keivitsa_data_notes.md).
 
 ![Collar map, depth, and grade](figures/data_overview.png)
 
@@ -26,9 +28,9 @@ The GTK tables were desurveyed with minimum curvature. Of 16,004 Cu samples in 2
 
 The same folds score four predictors: the training mean, kriging (v1), `nn_xyz` (coordinates only: x, y, z with Fourier features), and `nn_cov` (coordinates plus `depth_below_surface`). Keivitsa has no structure distance or surface geology. Skill is `1 − RMSE / RMSE_mean`, with RMSE pooled over test samples and the mean taken from that fold's training holes.
 
-![Network architecture](figures/network_architecture.png)
+![Method overview](figures/method_overview.svg)
 
-*Fourier features of xyz (16 bands), a 3 × 64 GELU MLP, and a head for μ and softplus σ. Five seeds; predictive variance is the mean of σ² plus the variance of the member means.*
+*Data preparation, model, and evaluation. The network takes Fourier features of x, y, z (16 scales per axis), passes them through a 3 × 64 GELU MLP, and outputs μ and a softplus σ. Five seeds form an ensemble; its predictive variance is the mean of σ² plus the variance of the member means. The code is in `examples/keivitsa_common.jl`.*
 
 `nn_cov` pooled skill is 0.152, essentially the same as `nn_xyz`. The block model and the figures below use `nn_xyz`.
 
@@ -42,7 +44,7 @@ Stopping on validation NLL (E0) halted at a median of 39 steps (validation skill
 
 *Synthetic diagnosis only. E0 underfits μ. E2 is the frozen real-Cu setting.*
 
-On the real final model (`stop_on = :val_rmse`, five seeds) the best steps are 13, 16, 19, 21, and 19. Validation RMSE there is 0.847–0.886, and at step 50 it is 0.900–0.948. Longer training fits noise. The smooth 3D field reflects what the data support: training longer only fits noise.
+On the real final model (`stop_on = :val_rmse`, five seeds) the best steps are 13, 16, 19, 21, and 19. Validation RMSE there is 0.847–0.886, and at step 50 it is 0.900–0.948: longer training only fits noise. The smooth 3D field reflects what the data support.
 
 ![Validation RMSE by seed](figures/val_rmse_curves.png)
 
@@ -74,15 +76,15 @@ The **per-hole paired mean** is the average, over 261 holes, of that hole's skil
 
 ## Uncertainty
 
-For a calibrated Gaussian, the median of σ / |error| is about 1.48. The neural field's median is 1.38; kriging (v1) is 0.58. Kriging (v1)'s 90 % intervals miss about half of the held-out samples.
+For a calibrated Gaussian, the median of σ / |error| is about 1.48. The neural field's median is 1.38. The kriging (v1) value in earlier versions of this report (0.58) was computed with the variance bug and has not been recomputed. With the corrected σ, kriging (v1)'s 90 % intervals miss about 22 % of the held-out samples (coverage 0.78), against 13 % for the neural field (0.87).
 
 ![90 % coverage by fold](figures/coverage_per_fold.png)
 
-*Nominal coverage is 0.90. The neural field stays in 0.74–0.92; kriging (v1) stays in 0.43–0.54.*
+*Share of held-out samples inside the 90 % interval, per fold. The dashed line is the nominal 0.90. The neural field ranges from 0.74 to 0.92 and reaches or nearly reaches the nominal level in several folds; kriging (v1) stays between 0.75 and 0.81 in every fold.*
 
 ![Calibration curve](figures/calibration_curve.png)
 
-*Observed frequency against nominal interval level. The neural field follows the diagonal; kriging (v1) falls below it.*
+*Observed frequency against nominal interval level. A calibrated method lies on the dashed diagonal; below it means intervals that are too narrow. The neural field lies just below the diagonal; kriging (v1) falls further below, most clearly for wide intervals.*
 
 ## 3D and section
 
@@ -94,7 +96,7 @@ The displayed block model keeps 80,761 cells inside 60 m of a sample, out of 2,9
 
 ![Predicted uncertainty](figures/3d_sigma.png)
 
-*Kriging (v1) σ is about 0.15–0.2 almost everywhere. Neural-field σ is larger and higher around isolated holes and near the surface, which matches the coverage gap.*
+*Kriging (v1) σ is about 0.4–0.45 almost everywhere. Neural-field σ is larger (0.5–1.2) and highest around isolated holes, at the edges of the drilled volume, and near the surface.*
 
 ![Vertical section](figures/section_mu_sigma.png)
 
