@@ -6,7 +6,11 @@ Predicts a rock property (e.g. copper grade) **and its uncertainty** at any 3D p
 
 ![Cross-section: predicted Cu and its uncertainty, kriging vs neural field](docs/figures/section_mu_sigma.png)
 
-*Top: predicted Cu. Bottom: uncertainty (brighter = less certain). Kriging (left) is equally confident everywhere; the neural field (right) is less certain where drilling is sparse.*
+**Kriging gives a patchier grade map; only the neural field shows where it is unsure.**
+
+- One vertical east–west slice through the deposit. Left: kriging. Right: neural field. Both are computed on the same blocks, so the outlines match; only the colours differ.
+- **Top row, predicted Cu:** yellow is high grade, blue is low. Dots are real drill samples.
+- **Bottom row, uncertainty (σ):** brighter means less certain. Kriging is the same dark colour almost everywhere. The neural field turns orange near the surface and around the lone hole on the left, where there is little data.
 
 ## Results
 
@@ -20,15 +24,37 @@ Predicts a rock property (e.g. copper grade) **and its uncertainty** at any 3D p
 - **Skill:** 0 = no better than the average; higher is better.
 - **Coverage:** share of held-out samples inside the 90 % interval; ideal is 0.90.
 
-**In short:** the neural field is at least as accurate as kriging, and its uncertainty is more honest. The accuracy gain is not statistically significant. Details: [technical report](docs/2026-09_keivitsa_technical_report.md).
+**In short (Cu):** the neural field is at least as accurate as kriging, and its uncertainty is more honest. The accuracy gain is not statistically significant. Details: [technical report](docs/2026-09_keivitsa_technical_report.md).
 
 ![Calibration curve](docs/figures/calibration_curve.png)
 
-*The closer to the dashed line, the more honest the uncertainty. The neural field (red) is closer than kriging (blue).*
+**Cu: the neural field's uncertainty is more honest than kriging's.**
+
+- Each point asks: "if a method says it is X % sure, how often is it actually right?"
+- On the dashed line, the answer matches exactly. Below the line, the method is overconfident.
+- The neural field (red) stays close to the line. Kriging (blue) drops further below it, most clearly at 90 %.
+
+### Density
+
+Data: 30,908 core measurements (kg/m³) from 263 holes. Same 10-fold test as for Cu.
+
+| Method | Skill | 90 % coverage |
+|---|---:|---:|
+| Kriging | 0.058 | 0.77 |
+| Neural field, position only (`nn_xyz`) | 0.059 | 0.89 |
+| Neural field, position + depth (`nn_cov`) | 0.065 | **0.90** |
+
+- **Accuracy:** position says little about density. The error drops only from 146.1 to 137.5 kg/m³ compared with the average, and no method reaches the 0.10 skill target.
+- **Hole by hole:** the network beats kriging on 153 of 263 holes (mean skill difference +0.055, 95 % CI 0.016 … 0.093).
+- **Uncertainty:** the network's intervals hit the target (0.89–0.90); kriging's are too narrow (0.77).
+
+Details: [density section of the report](docs/2026-09_keivitsa_technical_report.md#density).
 
 ## How it works
 
 ![Method overview](docs/figures/method_overview.svg)
+
+*Read top to bottom: prepare the drillhole data, train the model, then test it on drillholes it has never seen.*
 
 ## Quick start
 
@@ -42,18 +68,6 @@ julia --project=. examples/feasibility_keivitsa.jl
 ```
 
 Results go to `tmp_feasibility_keivitsa/`. A full run takes a few hours on a laptop. The other scripts in `examples/` build the block model and the figures.
-
-## Repository layout
-
-| Path | Contents |
-|---|---|
-| `src/` | the package: data loading, desurvey, covariates |
-| `examples/` | cross-validation, block model and figure scripts |
-| `examples/keivitsa_common.jl` | shared kriging and network code |
-| `sites/keivitsa.toml` | site settings |
-| `docs/` | technical report, data notes, figures |
-| `test/` | tests (the test data are synthetic) |
-| `legacy/` | archived older code, not used |
 
 ## Data licence
 
