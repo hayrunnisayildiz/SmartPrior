@@ -1,6 +1,6 @@
 # Tensor-product 3-D grid for the neural-field block model.
-# Arrays are indexed [i, j, k]. Axis meaning is the caller's: Cloncurry uses
-# x = easting, y = northing, z = elevation (positive up), metres. The origin
+# Arrays are indexed [i, j, k]. Axis meaning is the caller's: the original
+# use was x = easting, y = northing, z = elevation (positive up), metres. The origin
 # is the (x, y, z) corner of the first cell.
 
 """
@@ -110,7 +110,7 @@ cancels `origin[3]`.
 Warning: the value is height above `z[1]`. On an elevation-up grid that
 edge is the bottom of the box, not the ground surface, so this is not depth
 below the top. It is a leftover of the z-down grid. The formula is unchanged
-so existing Cloncurry results stay reproducible.
+so earlier results stay reproducible.
 """
 function depth_below_top(g::PriorGrid)
     nx, ny, nz = size(g)

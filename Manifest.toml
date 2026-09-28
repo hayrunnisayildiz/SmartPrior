@@ -2,7 +2,7 @@
 
 julia_version = "1.12.4"
 manifest_format = "2.0"
-project_hash = "96f927528150652c42278042a87a3bfb08c05562"
+project_hash = "14c5958c308d654c4dc8baf4ae6bfe0c646c85b0"
 
 [[deps.ADTypes]]
 deps = ["PrecompileTools"]
@@ -336,23 +336,6 @@ weakdeps = ["SparseArrays"]
     [deps.ChainRulesCore.extensions]
     ChainRulesCoreSparseArraysExt = "SparseArrays"
 
-[[deps.ChunkCodecCore]]
-git-tree-sha1 = "3496e2b359c27793d12bec54ec94be7983a6ceb2"
-uuid = "0b6fb165-00bc-4d37-ab8b-79f91016dbe1"
-version = "1.0.2"
-
-[[deps.ChunkCodecLibZlib]]
-deps = ["ChunkCodecCore", "Zlib_jll"]
-git-tree-sha1 = "d4101e848e8d3f585d61d244c2fe0c80a70e6b3b"
-uuid = "4c0bbee4-addc-4d73-81a0-b6caacae83c8"
-version = "1.1.0"
-
-[[deps.ChunkCodecLibZstd]]
-deps = ["ChunkCodecCore", "Zstd_jll"]
-git-tree-sha1 = "34d9873079e4cb3d0c62926a225136824677073f"
-uuid = "55437552-ac27-4d47-9aa3-63184e8fd398"
-version = "1.0.0"
-
 [[deps.ChunkSplitters]]
 git-tree-sha1 = "1c52c8e2673edc030191177ff1aee42d25149acb"
 uuid = "ae650224-84b6-46f8-82ea-d812ca08434e"
@@ -481,37 +464,6 @@ weakdeps = ["Dates", "LinearAlgebra"]
 deps = ["Artifacts", "Libdl"]
 uuid = "e66e0078-7015-5450-92f7-15fbd957f2ae"
 version = "1.3.0+1"
-
-[[deps.ComponentArrays]]
-deps = ["Adapt", "ArrayInterface", "ChainRulesCore", "ConstructionBase", "Functors", "LinearAlgebra", "PrecompileTools", "Random", "StaticArrayInterface", "StaticArraysCore"]
-git-tree-sha1 = "682db2440a82f959268bc38c9f19ec77f0c51efa"
-uuid = "b0b7db55-cfe3-40fc-9ded-d10e2dbeff66"
-version = "0.15.49"
-
-    [deps.ComponentArrays.extensions]
-    ComponentArraysGPUArraysExt = "GPUArrays"
-    ComponentArraysKernelAbstractionsExt = "KernelAbstractions"
-    ComponentArraysMooncakeExt = "Mooncake"
-    ComponentArraysOptimisersExt = "Optimisers"
-    ComponentArraysReactantExt = "Reactant"
-    ComponentArraysRecursiveArrayToolsExt = "RecursiveArrayTools"
-    ComponentArraysReverseDiffExt = "ReverseDiff"
-    ComponentArraysSciMLBaseExt = ["SciMLBase", "SymbolicIndexingInterface"]
-    ComponentArraysTrackerExt = "Tracker"
-    ComponentArraysZygoteExt = "Zygote"
-
-    [deps.ComponentArrays.weakdeps]
-    GPUArrays = "0c68f7d7-f131-5f86-a1c3-88cf8149b2d7"
-    KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
-    Mooncake = "da2b9cff-9c12-43a0-ae48-6db2b0edb7d6"
-    Optimisers = "3bd65402-5787-11e9-1adc-39752487f4e2"
-    Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
-    RecursiveArrayTools = "731186ca-8d62-57ce-b412-fbd966d074cd"
-    ReverseDiff = "37e2e3b7-166d-5795-8a7a-e32c996b4267"
-    SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
-    SymbolicIndexingInterface = "2efcf032-c050-4f8e-a9bb-153293bab1f5"
-    Tracker = "9f7883ad-71c0-57eb-9f7f-b5c9e6d3789c"
-    Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [[deps.CompositionsBase]]
 git-tree-sha1 = "802bb88cd69dfd1509f6670416bd4434015693ad"
@@ -1495,18 +1447,6 @@ version = "1.10.0"
 git-tree-sha1 = "a3f24677c21f5bbe9d2a714f95dcd58337fb2856"
 uuid = "82899510-4779-5014-852e-03e436cf321d"
 version = "1.0.0"
-
-[[deps.JLD2]]
-deps = ["ChunkCodecCore", "ChunkCodecLibZlib", "ChunkCodecLibZstd", "FileIO", "MacroTools", "Mmap", "OrderedCollections", "PrecompileTools", "ScopedValues"]
-git-tree-sha1 = "9ce2e7c49ae4a7035b7d60db3a553b1f6c16875d"
-uuid = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
-version = "0.6.7"
-
-    [deps.JLD2.extensions]
-    UnPackExt = "UnPack"
-
-    [deps.JLD2.weakdeps]
-    UnPack = "3a884ed6-31ef-47d7-9d2a-63182c4928ed"
 
 [[deps.JLLWrappers]]
 deps = ["Artifacts", "Preferences"]
@@ -2594,7 +2534,7 @@ uuid = "45858cf5-a6b0-47a3-bbea-62219f50df47"
 version = "0.1.5"
 
 [[deps.SmartPrior]]
-deps = ["ArchGDAL", "CodecZlib", "ComponentArrays", "GLMakie", "GeoStats", "JLD2", "LinearAlgebra", "Lux", "Optimisers", "Printf", "Random", "Statistics", "TOML", "WriteVTK", "Zygote"]
+deps = ["ArchGDAL", "GLMakie", "GeoStats", "LinearAlgebra", "Lux", "Optimisers", "Printf", "Random", "Statistics", "TOML", "WriteVTK", "Zygote"]
 path = "."
 uuid = "7ba2762e-3153-4b60-bd0e-7961f2e082cf"
 version = "0.2.0"

@@ -1,5 +1,5 @@
 using Test
-using SmartPrior
+using .GridStack
 using Statistics
 
 function _test_grid()

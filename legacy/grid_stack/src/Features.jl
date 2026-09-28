@@ -640,7 +640,7 @@ end
     append_channels(s::FeatureStack, chans, names) -> FeatureStack
 
 Concatenate extra `[nx,ny,nz]` channels onto an existing stack. Used by the
-Cloncurry line to add structural-geology maps without threading them through
+earlier pipeline to add structural-geology maps without threading them through
 [`build_features`](@ref).
 """
 function append_channels(s::FeatureStack,

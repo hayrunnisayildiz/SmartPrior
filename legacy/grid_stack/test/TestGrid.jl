@@ -1,5 +1,5 @@
 using Test
-using SmartPrior
+using .GridStack
 
 @testset "PriorGrid" begin
     dx = [100.0, 200.0, 400.0]

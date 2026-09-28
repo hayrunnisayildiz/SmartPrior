@@ -7,10 +7,10 @@ out/
 tmp_compare_2d/
 tmp_calib/
 tmp/
+tmp_feasibility/
 
 # data downloaded from external providers, never vendored into the repo
 data/raw/
-data_aust/
 
 # diagnostic run directories and large binary dumps (not vendored)
 archive/
@@ -24,9 +24,6 @@ tmp_keivitsa_prior_z10/
 tmp_keivitsa_prior_sigmafloor/
 tmp_keivitsa_prior_wide/
 tmp_keivitsa_prior_deep/
-tmp_cloncurry_prior/
-tmp_cloncurry_prior_eh/
-tmp_cloncurry_prior_eh_holdout/
 tmp_musgrave/
 tmp_musgrave_coarse/
 tmp_musgrave_smooth50/
