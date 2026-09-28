@@ -1,76 +1,74 @@
 # SmartPrior
 
-A Julia / Lux.jl neural field that predicts a rock property, and its uncertainty, at any 3D point from sparse drillholes. The test site is Keivitsa (GTK, Finland): copper is complete, density is complete.
+A Julia / Lux.jl neural field that predicts a rock property, and its uncertainty, at any 3D point from sparse drillholes. It is tested against ordinary kriging on GTK drillhole data from the Keivitsa Cu–Ni deposit, Finland.
 
-![Keivitsa Cu uncertainty: kriging (v1) is nearly flat; the neural field is larger and structured](docs/figures/3d_sigma.png)
+**Status:** research prototype. Copper and density runs are complete; susceptibility is supported by the scripts but has not been run yet.
 
-*Predicted σ for log10 Cu. Kriging (v1) stays near 0.4–0.45; the neural field is 0.5–1.2, larger near isolated holes, the edges of the drilled volume, and the surface.*
+![E–W cross-section of predicted log10 Cu (top) and its uncertainty σ (bottom), kriging on the left and the neural field on the right](docs/figures/section_mu_sigma.png)
 
-> **Correction (2026-09-25).** GeoStats.jl, in the version pinned here, returns ordinary-kriging predictions as `Normal(μ, σ²)`: the second parameter is the kriging *variance*. Earlier runs read it as the standard deviation, so every kriging σ and kriging coverage reported before this date is wrong. Kriging means, RMSE and skill are unaffected, and so are all neural-field results. `kriging_predict` now checks the behaviour on a known case and takes the square root when needed (`examples/check_kriging_sigma.jl`). The corrected numbers are below. The coverage, calibration, 3D and section figures in `docs/figures/` were regenerated with the corrected kriging σ.
+*A vertical east–west slice through the deposit. **Top row:** predicted copper grade μ (log10 ppm; 2 = 100 ppm, 3 = 1,000 ppm). Circles are drill samples within 20 m of the slice, coloured by their measured grade. **Bottom row:** predicted uncertainty σ (log10 units; higher = less certain). Black marks show where those samples are. **How to read it:** kriging (left) produces a detailed μ but an almost uniform σ, so it reports the same confidence everywhere. The neural field (right) gives a smoother μ, and its σ is highest near the surface and around isolated holes, which is where predictions should be least certain.*
 
 ## Key results
 
-Skill is `1 − RMSE / RMSE_mean`, pooled over held-out samples, with 10-fold hole-grouped cross-validation. Coverage is the share of held-out samples inside the 90 % interval (nominal 0.90).
+Scores come from 10-fold cross-validation in which whole drillholes are held out. **Skill** is `1 − RMSE / RMSE_mean`: 0 means no better than predicting the training average, and higher is better. **Coverage** is the share of held-out samples that fall inside the method's 90 % interval; a well-calibrated method scores close to 0.90.
 
 | Site / target | Holes | Samples | Kriging (v1) skill | Neural field skill | Kriging (v1) coverage | Neural field coverage |
 |---|---:|---:|---:|---:|---:|---:|
 | Keivitsa Cu (log10 ppm) | 261 | 15,859 | 0.106 | 0.151 (`nn_xyz`) | 0.78 | 0.87 |
 | Keivitsa density (kg/m³) | 263 | 30,908 | 0.058 | 0.059 (`nn_xyz`), 0.065 (`nn_cov`) | 0.77 | 0.89 (`nn_xyz`), 0.90 (`nn_cov`) |
 
-**Copper.** The neural field is non-inferior to kriging (v1): all three pre-registered conditions pass. The pooled difference is not significant. Both methods under-cover; kriging (v1) is more overconfident (0.78 vs 0.87). The earlier claim of 0.48 kriging coverage came from the variance bug.
+`nn_xyz` sees only the coordinates; `nn_cov` also sees depth below the ground surface.
 
-**Density.** Coordinates carry little information about density: RMSE falls from 146.1 to 137.5 kg/m³ against the training mean. The pre-registered rule is not met (`useful = 0`): skill is below 0.10, although its 95 % interval (0.003 … 0.114 for `nn_xyz`) sits above 0. Per hole, the network beats kriging (v1) on 153 of 263 holes, mean paired skill difference +0.055 (0.016 … 0.093). The network's intervals are well calibrated (0.89–0.90); kriging (v1) is overconfident (0.77).
+**Copper.** The neural field is non-inferior to kriging (v1): all three pre-registered conditions pass. The difference in pooled skill is not statistically significant. Both methods under-cover, but kriging (v1) is more overconfident (0.78 vs 0.87).
 
-![Pooled skill with 95 % hole-bootstrap CI](docs/figures/skill_ci.png)
+**Density.** Coordinates carry little information about density: RMSE falls only from 146.1 to 137.5 kg/m³ compared with the training mean. The pre-registered rule is not met (`useful = 0`): skill is below 0.10, although its 95 % interval (0.003 … 0.114 for `nn_xyz`) is above 0. Hole by hole, the network beats kriging (v1) on 153 of 263 holes (mean paired skill difference +0.055, 95 % CI 0.016 … 0.093). The network's intervals are well calibrated (0.89–0.90); kriging (v1) is overconfident (0.77).
 
-*Pooled Cu skill. Neural field (`nn_xyz` / `nn_cov`) sits above the 0.10 line; intervals overlap kriging (v1).*
+![Pooled Cu skill with 95 % confidence intervals for the mean, kriging and the two neural-field variants](docs/figures/skill_ci.png)
 
-![Predicted vs observed log10 Cu](docs/figures/pred_vs_obs.png)
+*Copper skill for each method. Dots are the pooled skill; bars are 95 % confidence intervals from resampling whole holes. The dotted line at 0.10 is the pre-registered minimum. **How to read it:** both neural-field dots sit above the line, but their intervals overlap kriging's, so the network is "at least as good", not proven better.*
 
-*Held-out predicted vs observed. Both methods track the 1:1 line; the neural field is not a mean collapse.*
+![Calibration curve: empirical versus nominal interval coverage for kriging and the neural field](docs/figures/calibration_curve.png)
 
-![Per-fold 90 % predictive coverage](docs/figures/coverage_per_fold.png)
+*Are the uncertainty intervals honest? For each nominal interval width (x-axis: 10 %, 20 %, … 95 %), the y-axis shows how many held-out Cu samples actually fell inside it. **How to read it:** a perfectly calibrated method lies on the dashed 1:1 line. Curves below the line are overconfident, meaning their intervals are too narrow. The neural field (red) stays closer to the line than kriging (blue), most clearly at the wide intervals used in practice.*
 
-*90 % coverage by fold (corrected kriging σ). Kriging (v1) stays ~0.75–0.81; `nn_xyz` is closer to the nominal 0.90.*
+More figures (per-fold coverage, predicted vs observed, 3D block models, training curves) are in the [Keivitsa technical report](docs/2026-09_keivitsa_technical_report.md).
 
-![Calibration curve](docs/figures/calibration_curve.png)
+## How it works
 
-*Predictive calibration (corrected σ). Neural-field intervals are closer to the diagonal than kriging (v1).*
+![Method overview: GTK tables are desurveyed into a sample table with covariates; a Fourier-feature MLP ensemble predicts μ and σ; evaluation uses 10-fold hole-grouped cross-validation against the mean and kriging](docs/figures/method_overview.svg)
 
-![Keivitsa Cu μ block model](docs/figures/3d_mu.png)
+The network code is `build_mlp`, `train_member` and `ensemble_predict` in [`examples/keivitsa_common.jl`](examples/keivitsa_common.jl). Training uses AdamW (learning rate 10⁻³, weight decay 10⁻⁴) for up to 2,000 full-batch steps. The reasoning behind the stopping rule is in [`docs/keivitsa_data_notes.md`](docs/keivitsa_data_notes.md).
 
-*Block-model μ (log10 Cu), kept blocks ≤60 m from a hole. Kriging is grainier; the neural field is smoother.*
+## Requirements
 
-![E–W section μ and σ](docs/figures/section_mu_sigma.png)
+- **Julia 1.10 or newer.** The committed `Manifest.toml` was resolved with Julia 1.12.
+- **GDAL** is installed automatically through ArchGDAL; no system GDAL is needed.
+- **A display (OpenGL)** for the `figures_*.jl` scripts, which use GLMakie. On a headless server, run them under `xvfb-run`.
+- **Time:** the density cross-validation took 3.2 h on a MacBook Air; Cu is shorter.
 
-*E–W section through mean drilling northing. Bottom row: kriging σ is nearly flat; neural-field σ rises near the surface and gaps.*
+## Data
 
-![High-grade shell](docs/figures/3d_shell.png)
+The Keivitsa data are not in this repository. They were downloaded from [Hakku](https://hakku.gtk.fi/en), the search and download service of GTK (Geological Survey of Finland).
 
-*Blocks with μ ≥ 2.5 (≈316 ppm Cu). Shell geometry differs; count of blocks above threshold is higher for the neural field.*
+Point `KEIVITSA_ROOT` at the unpacked GTK `source/gtk` folder. The adapter reads these files, relative to that folder (paths can be overridden in `sites/keivitsa.toml`):
 
-## Pipeline
+| Table | Path |
+|---|---|
+| Collars | `report/3_DRILLINGS/Logs/Shape_files/collar.shp` (with `.dbf`, `.prj`) |
+| Survey stations | `report/3_DRILLINGS/Logs/Shape_files/kalte.txt` |
+| Cu assays, method 511P | `report/3_DRILLINGS/Assays/Shape_files/511P.txt` |
+| Density and susceptibility | `report/3_DRILLINGS/Downhole_soundings_and_core_measurements/petro.txt` |
 
-```mermaid
-flowchart LR
-  gtk["GTK raw tables"] --> desurvey["desurvey"]
-  desurvey --> adapter["adapter"]
-  adapter --> samples["SampleTable"]
-  samples --> cov["covariates"]
-  cov --> cv["hole-grouped CV"]
-  cv --> bm["block model"]
-```
+### Licence and attribution
 
-![Network: Fourier xyz, MLP, μ and σ](docs/figures/network_architecture.png)
+The data are used under the [GTK basic licence](https://www.gtk.fi/en/basic-licence/), which allows use in academic publications but does not allow redistributing the data. For that reason no raw or derived data tables are committed, and the test fixture in `test/fixtures/keivitsa_tiny/` is synthetic. The figures in `docs/figures/` are derived from the data and carry this notice:
 
-*Five-member ensemble. Coordinates are Fourier-encoded (16 bands); other covariates are appended. A 3 × 64 GELU MLP emits μ and softplus σ. The network is `build_mlp` in `examples/keivitsa_common.jl`.*
+> **Keivitsa drillhole data (Hakku), edited © Geological Survey of Finland [2026].** The figures show model results derived from this material; they are not the original data.
 
 ## Quick start
 
-Set `KEIVITSA_ROOT` to the unpacked GTK `source/gtk` tree. Data stay outside the repo.
-
 ```bash
-julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.resolve()'
+julia --project=. -e 'using Pkg; Pkg.instantiate()'
 julia --project=. -e 'using Pkg; Pkg.test()'
 
 # sanity checks, no GTK data needed (seconds)
@@ -82,6 +80,7 @@ export KEIVITSA_ROOT=/path/to/gtk
 julia --project=. examples/feasibility_keivitsa.jl
 SMARTPRIOR_TARGET=density julia --project=. examples/feasibility_keivitsa.jl
 
+# diagnostics, final block model, and report figures
 julia --project=. examples/diagnose_nn_keivitsa.jl
 julia --project=. examples/keivitsa_run2_checks.jl
 julia --project=. examples/keivitsa_blockmodel.jl
@@ -91,7 +90,7 @@ julia --project=. examples/figures_results.jl
 julia --project=. examples/figures_3d.jl
 ```
 
-Outputs go to `tmp_feasibility_keivitsa/` for Cu and `tmp_feasibility_keivitsa_<target>/` for other targets (all gitignored). The script refuses a non-empty work directory and a leftover `.run.lock`, so two runs cannot share one output folder. It logs a runtime estimate after the first fold; the density run took 3.2 h on a MacBook Air.
+Outputs go to `tmp_feasibility_keivitsa/` for Cu and `tmp_feasibility_keivitsa_<target>/` for other targets (all gitignored). The script refuses a non-empty work directory and a leftover `.run.lock`, so two runs cannot share one output folder. It logs a runtime estimate after the first fold.
 
 ## Repository layout
 
@@ -105,27 +104,37 @@ Outputs go to `tmp_feasibility_keivitsa/` for Cu and `tmp_feasibility_keivitsa_<
 | `src/KeivitsaIO.jl` | GTK adapter to `SampleTable` |
 | `src/SyntheticFields.jl` | seedable Gaussian fields |
 | `sites/keivitsa.toml` | Keivitsa box, CRS (EPSG:2393), properties, covariates |
-| `examples/keivitsa_common.jl` | shared variogram, kriging, network, and bookkeeping code (included by the scripts below, not run on its own) |
-| `examples/keivitsa_inspect.jl` | data checks |
-| `examples/diagnose_nn_keivitsa.jl` | synthetic stopping diagnosis |
+| `examples/keivitsa_common.jl` | shared variogram, kriging, network and bookkeeping code (included by the scripts below, not run on its own) |
 | `examples/feasibility_keivitsa.jl` | 10-fold Keivitsa CV, target set by `SMARTPRIOR_TARGET` |
-| `examples/keivitsa_run2_checks.jl` | byte compare, coverage, variograms |
+| `examples/feasibility_keivitsa_pilot.jl` | 30-hole pilot |
+| `examples/keivitsa_inspect.jl` | data checks |
+| `examples/diagnose_nn_keivitsa.jl` | early-stopping diagnosis on a synthetic target |
+| `examples/keivitsa_run2_checks.jl` | byte compare of reruns, coverage, variograms |
 | `examples/keivitsa_blockmodel.jl` | final Cu block model |
 | `examples/figures_{data,training,results,3d}.jl` | report figures |
-| `examples/feasibility_keivitsa_pilot.jl` | 30-hole pilot |
 | `examples/check_kriging_sigma.jl` | kriging σ is a standard deviation (known case) |
 | `examples/check_binned_variogram.jl` | streaming variogram bins equal stored-pair bins |
-| `docs/figures/` | figures cited in the reports |
-| `docs/2026-09_keivitsa_technical_report.md` | Keivitsa report |
-| `docs/keivitsa_data_notes.md` | GTK conventions, statistics only |
+| `docs/2026-09_keivitsa_technical_report.md` | full Keivitsa write-up |
+| `docs/keivitsa_data_notes.md` | GTK file conventions, statistics only |
+| `docs/figures/` | figures cited in the README and the report |
 | `test/` | package tests; `test/fixtures/keivitsa_tiny/` is a synthetic GTK-format fixture |
 | `legacy/grid_stack/` | archived grid-based prior (`PriorGrid`, `PriorNet`, training loop); not loaded by the package |
 
-Full write-up: [Keivitsa technical report](docs/2026-09_keivitsa_technical_report.md). The report carries the corrected kriging coverage and σ, and a density section.
-
 ## Notes
 
-- The kriging variogram step counts point pairs without storing them (memory O(bins) instead of O(n²)). The stored-pair version ran out of memory on Keivitsa density, about 250 million pairs per fold; the check script shows the bins are bit-identical.
+- The kriging variogram step counts point pairs without storing them (memory O(bins) instead of O(n²)). The stored-pair version ran out of memory on Keivitsa density, about 250 million pairs per fold; `check_binned_variogram.jl` shows the bins are bit-identical.
 - Kriging (v1) pins the vertical range at the optimiser bound in most folds for both Cu and density. Kriging (v2) is the next baseline.
-- GTK data are never committed. Check the GTK licence terms before publishing figures derived from the data.
-- `legacy/grid_stack/` keeps the earlier grid-based prior (`PriorGrid`, `PriorNet`, `train_prior`) as its own module, `GridStack`. The Keivitsa pipeline does not use it. Its tests run with `julia --project=. legacy/grid_stack/test/runtests.jl` after `Pkg.add("JLD2")`; see `legacy/grid_stack/README.md` for known issues.
+- `legacy/grid_stack/` keeps the earlier grid-based prior as its own module, `GridStack`. The Keivitsa pipeline does not use it. Its tests run with `julia --project=. legacy/grid_stack/test/runtests.jl` after `Pkg.add("JLD2")`; see [`legacy/grid_stack/README.md`](legacy/grid_stack/README.md) for known issues.
+
+## Changelog
+
+- **2026-09-28.** Removed an earlier, unrelated study site and its code; archived the unused grid stack under `legacy/`.
+- **2026-09-25.** Kriging σ corrected. GeoStats.jl, in the version pinned here, returns ordinary-kriging predictions as `Normal(μ, σ²)`: the second parameter is the kriging *variance*. Earlier runs read it as the standard deviation, so every kriging σ and kriging coverage reported before this date was wrong (for example, a previously reported kriging coverage of 0.48 for Cu is really 0.78). Kriging means, RMSE and skill were unaffected, as were all neural-field results. `kriging_predict` now checks the behaviour on a known case (`examples/check_kriging_sigma.jl`), and all figures were regenerated.
+
+## Licence and citation
+
+The code is released under the MIT licence; see [`LICENSE`](LICENSE). The GTK data keep their own licence (see [Data](#data)).
+
+If you use this code, please cite:
+
+> Yıldız, H. (2026). *SmartPrior: neural-field priors with uncertainty from sparse drillholes.* https://github.com/hayrunnisayildiz/SmartPrior
